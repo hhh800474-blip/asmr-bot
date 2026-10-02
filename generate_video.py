@@ -32,7 +32,8 @@ PEXELS_API_KEY = os.getenv("PEXELS_API_KEY", "").strip()  # strip يشيل ال�
 PIXABAY_API_KEY = os.getenv("PIXABAY_API_KEY", "").strip()  # strip يشيل المسافات والأسطر الزايدة
 FREESOUND_API_KEY = os.getenv("FREESOUND_API_KEY", "").strip()  # strip يشيل المسافات والأسطر الزايدة
 
-VIDEO_SECONDS = int(os.getenv("VIDEO_SECONDS", "15"))      # قصير = نسبة مشاهدة كاملة أعلى
+VIDEO_SECONDS = float(os.getenv("VIDEO_SECONDS", "15"))        # أطول مدة
+VIDEO_MIN_SECONDS = float(os.getenv("VIDEO_MIN_SECONDS", "7"))  # أقصر مدة
 HOOK_TEXT_ENABLED = os.getenv("HOOK_TEXT_ENABLED", "1") == "1"
 CONTENT_LANG = os.getenv("CONTENT_LANG", "en")             # en أو ar
 VOICE = os.getenv("VOICE", "en-US-AriaNeural")             # للعربي: ar-SA-ZariyahNeural
@@ -131,7 +132,7 @@ Avoid repeating these recent titles: {recent}
 Return ONLY JSON with these keys:
 - theme: short scene in English
 - pexels_query: pick EXACTLY one from this list: {list(SATISFYING)}
-- sounds: list of 2 English search terms for crisp trigger sound effects
+- sounds: list of 2 SIMPLE sound search terms, 1-2 common English words each (e.g. "crunch", "pouring water")
 - hook: on-screen text for the first 3 seconds, in English, max 6 words,
   creates curiosity (e.g. "Wait for the last crunch..."), no emoji
 - title: curiosity title in {lang_note}, max 60 chars, 1 emoji
@@ -260,34 +261,71 @@ def get_video(query, history, workdir):
 
 
 # ------------------------- 3) الأصوات -------------------------
-def get_freesound(queries, history, workdir):
+GENERIC_SOUNDS = ["crunch", "liquid pour", "squish", "tapping", "water", "rain", "foley"]
+
+
+def freesound_search(q, history, min_dur):
+    r = requests.get("https://freesound.org/apiv2/search/text/", timeout=30, params={
+        "query": q,
+        "filter": f'license:"Creative Commons 0" duration:[{min_dur} TO 600]',
+        "fields": "id,name,username,previews,duration",
+        "page_size": 20,
+        "token": FREESOUND_API_KEY,
+    })
+    r.raise_for_status()
+    res = r.json().get("results", [])
+    fresh = [x for x in res if x["id"] not in history["freesound_ids"]]
+    return fresh or res
+
+
+def candidate_terms(q, video_query):
+    """من البحث الدقيق للأعم: الجملة كاملة، كل كلمة لوحدها، أصوات القائمة، أصوات عامة"""
+    terms = [q] + [w for w in q.split() if len(w) > 3]
+    if video_query in SATISFYING:
+        terms += SATISFYING[video_query][1]
+    terms += GENERIC_SOUNDS
+    seen, out = set(), []
+    for t in terms:
+        if t.lower() not in seen:
+            seen.add(t.lower())
+            out.append(t)
+    return out
+
+
+def get_freesound(queries, history, workdir, video_query=""):
     if not FREESOUND_API_KEY:
         raise RuntimeError("FREESOUND_API_KEY مفقود")
-    paths, credits = [], []
-    for i, q in enumerate(queries[:3]):
+    paths, credits, used = [], [], set()
+    for i, q in enumerate(queries[:2]):
+        found = None
+        for term in candidate_terms(q, video_query):
+            for min_dur in (10, 2):          # أول شي أصوات طويلة، بعدين نقبل القصيرة (تنعاد تلقائياً)
+                try:
+                    res = [x for x in freesound_search(term, history, min_dur) if x["id"] not in used]
+                except Exception as e:
+                    log(f"خطأ ببحث الصوت '{term}': {e}")
+                    res = []
+                if res:
+                    found = random.choice(res[:8])
+                    break
+            if found:
+                if term != q:
+                    log(f"ما لقينا '{q}'، استخدمنا '{term}'")
+                break
+        if not found:
+            log(f"ما لقينا صوت لـ: {q}")
+            continue
         try:
-            r = requests.get("https://freesound.org/apiv2/search/text/", timeout=30, params={
-                "query": q,
-                "filter": 'license:"Creative Commons 0" duration:[15 TO 600]',
-                "fields": "id,name,username,previews,duration",
-                "page_size": 15,
-                "token": FREESOUND_API_KEY,
-            })
-            r.raise_for_status()
-            results = [s for s in r.json().get("results", [])
-                       if s["id"] not in history["freesound_ids"]] or r.json().get("results", [])
-            if not results:
-                log(f"ما لقينا صوت لـ: {q}")
-                continue
-            s = random.choice(results[:8])
             p = workdir / f"sound{i}.mp3"
-            download(s["previews"]["preview-hq-mp3"], p)
+            download(found["previews"]["preview-hq-mp3"], p)
             paths.append(p)
-            credits.append({"freesound_id": s["id"], "name": s["name"], "author": s["username"]})
-            history["freesound_ids"].append(s["id"])
-            log(f"صوت: {s['name']}")
+            used.add(found["id"])
+            credits.append({"freesound_id": found["id"], "name": found["name"],
+                            "author": found["username"]})
+            history["freesound_ids"].append(found["id"])
+            log(f"صوت: {found['name']}")
         except Exception as e:
-            log(f"خطأ بالصوت '{q}': {e}")
+            log(f"خطأ بتحميل الصوت: {e}")
     if not paths:
         raise RuntimeError("ما حصلنا أي صوت")
     return paths, credits
@@ -320,8 +358,27 @@ def find_font():
     return None
 
 
-def build_video(clip, sounds, voice, out_path, seconds=VIDEO_SECONDS, hook=None):
-    D = seconds
+def clip_duration(path):
+    try:
+        out = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration",
+                              "-of", "csv=p=0", str(path)], capture_output=True, text=True)
+        return float(out.stdout.strip())
+    except Exception:
+        return 0.0
+
+
+def choose_duration(clip):
+    """مدة عشوائية بين الأقل والأكثر، وما تتجاوز طول المقطع حتى ما يبين إنه يتكرر"""
+    target = random.uniform(VIDEO_MIN_SECONDS, VIDEO_SECONDS)
+    real = clip_duration(clip)
+    if real > 0:
+        target = min(target, real - 0.2)
+    return round(max(target, min(VIDEO_MIN_SECONDS, VIDEO_SECONDS)), 1)
+
+
+def build_video(clip, sounds, voice, out_path, seconds=None, hook=None):
+    D = seconds or choose_duration(clip)
+    log(f"مدة الفيديو: {D} ثانية")
     hook_filter = ""
     font = find_font()
     if hook and HOOK_TEXT_ENABLED and font:
@@ -386,7 +443,8 @@ def main():
     if video_credit.get("query") and video_credit["query"] != idea["pexels_query"]:
         # الفيديو تغيّر، فنخلي الأصوات تناسبه
         idea["sounds"] = SATISFYING[video_credit["query"]][1]
-    sounds, sound_credits = get_freesound(idea["sounds"], history, workdir)
+    sounds, sound_credits = get_freesound(idea["sounds"], history, workdir,
+                                         video_credit.get("query", idea["pexels_query"]))
     voice = make_whisper(idea.get("whisper", ""), workdir)
 
     video_path = build_video(clip, sounds, voice, workdir / "video.mp4", hook=idea.get("hook"))
