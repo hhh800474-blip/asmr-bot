@@ -42,25 +42,41 @@ BASE = Path(__file__).parent
 OUT_ROOT = BASE / "output"
 HISTORY_FILE = BASE / "history.json"
 
+# قائمة البحث المسموحة: لقطات satisfying فقط (Gemini يختار منها)
+# كل عنصر: كلمة البحث، الكلمات اللي لازم تكون بوسوم الفيديو، أصوات مناسبة
+SATISFYING = {
+    "slime":            (["slime"], ["slime squish", "slime"]),
+    "kinetic sand":     (["sand", "kinetic"], ["sand crunch", "sand"]),
+    "paint mixing":     (["paint", "mixing"], ["paint mixing", "squish"]),
+    "paint pouring":    (["paint", "pour", "acrylic"], ["pouring liquid", "paint"]),
+    "fluid art":        (["fluid", "paint", "acrylic", "art"], ["liquid flow", "pouring"]),
+    "ink in water":     (["ink", "water"], ["underwater", "water bubbles"]),
+    "honey pouring":    (["honey", "pour", "syrup"], ["sticky liquid pour", "honey"]),
+    "chocolate pouring": (["chocolate"], ["pouring liquid", "chocolate"]),
+    "melting chocolate": (["chocolate", "melt"], ["sizzle", "liquid"]),
+    "soap cutting":     (["soap"], ["soap cutting", "knife cutting"]),
+    "cutting cake":     (["cake", "cutting", "knife"], ["knife cutting", "cake"]),
+    "ice cubes":        (["ice"], ["ice crunch", "ice cubes glass"]),
+    "pouring water":    (["water", "pour", "glass"], ["pouring water glass", "water"]),
+    "foam":             (["foam", "bubbles"], ["foam", "fizz"]),
+    "bubbles macro":    (["bubble", "bubbles"], ["fizz", "bubbles"]),
+    "glitter":          (["glitter"], ["glitter", "shaker"]),
+    "pottery wheel":    (["pottery", "clay"], ["clay", "pottery"]),
+    "dough kneading":   (["dough", "kneading"], ["dough", "squish"]),
+    "cream whipping":   (["cream", "whip"], ["whisk", "mixing bowl"]),
+    "candle wax":       (["wax", "candle"], ["candle", "match strike"]),
+}
+# وسوم نرفضها حتى ما تطلع حشرات وورود ومناظر طبيعية
+BANNED_TAGS = {"bee", "insect", "flower", "flowers", "animal", "bird", "dog", "cat",
+               "landscape", "mountain", "sky", "sea", "beach", "city", "woman", "man",
+               "people", "person", "girl", "boy", "face", "portrait", "tree", "forest"}
+
 # أفكار احتياطية إذا Gemini ما اشتغل
-PRESETS = [
-    {"theme": "cutting soap cubes", "pexels_query": "cutting soap",
-     "sounds": ["soap cutting crunch", "knife cutting"], "hook": "Wait for the last cut..."},
-    {"theme": "crunchy ice", "pexels_query": "ice cubes close up",
-     "sounds": ["ice crunch", "ice cubes glass"], "hook": "The final crunch is unreal"},
-    {"theme": "kinetic sand slicing", "pexels_query": "kinetic sand",
-     "sounds": ["sand crunch", "cutting sand"], "hook": "Listen closely..."},
-    {"theme": "honey dripping", "pexels_query": "honey dripping",
-     "sounds": ["sticky liquid pour", "honey"], "hook": "You'll watch this twice"},
-    {"theme": "slime pressing", "pexels_query": "slime hands",
-     "sounds": ["slime squish", "squishy"], "hook": "Turn your sound on 🔊"},
-    {"theme": "pouring coffee over ice", "pexels_query": "iced coffee pouring",
-     "sounds": ["pouring liquid glass", "ice crackle"], "hook": "Wait for the pour..."},
-    {"theme": "match striking in the dark", "pexels_query": "match fire close up",
-     "sounds": ["match strike", "candle flame"], "hook": "Only 1% hear the last sound"},
-    {"theme": "rain tapping on glass", "pexels_query": "raindrops glass macro",
-     "sounds": ["rain on window close", "tapping glass"], "hook": "Headphones on... trust me"},
-]
+HOOKS = ["Wait for the last one...", "Watch till the end", "The ending is so satisfying",
+         "Only 1% hear the last sound", "Headphones on... trust me", "You'll watch this twice",
+         "Wait for it...", "This sound is unreal"]
+PRESETS = [{"theme": q, "pexels_query": q, "sounds": v[1], "hook": random.choice(HOOKS)}
+           for q, v in SATISFYING.items()]
 
 
 # ------------------------- أدوات مساعدة -------------------------
@@ -114,7 +130,7 @@ cutting, crunching, pouring, dripping, tapping, peeling, squishing, crackling.
 Avoid repeating these recent titles: {recent}
 Return ONLY JSON with these keys:
 - theme: short scene in English
-- pexels_query: 2-3 English words for a close-up stock video of the action (no faces)
+- pexels_query: pick EXACTLY one from this list: {list(SATISFYING)}
 - sounds: list of 2 English search terms for crisp trigger sound effects
 - hook: on-screen text for the first 3 seconds, in English, max 6 words,
   creates curiosity (e.g. "Wait for the last crunch..."), no emoji
@@ -141,6 +157,11 @@ Return ONLY JSON with these keys:
             idea = json.loads(text.replace("```json", "").replace("```", "").strip())
             for key in fallback:
                 idea.setdefault(key, fallback[key])
+            q = str(idea.get("pexels_query", "")).lower().strip()
+            if q not in SATISFYING:
+                q = random.choice(list(SATISFYING))
+                log(f"Gemini اختار بحث مو بالقائمة، بدلناه بـ: {q}")
+            idea["pexels_query"] = q
             log(f"الفكرة ({model}): {idea['title']}")
             return idea
         except Exception as e:
@@ -177,21 +198,40 @@ def get_pexels_video(query, history, workdir):
                   "url": video["url"]}
 
 
+def search_pixabay(query, history):
+    """يرجع الفيديوهات المناسبة فقط: وسومها تطابق البحث وما بيها حشرات/ناس/طبيعة"""
+    r = requests.get("https://pixabay.com/api/videos/", timeout=30, params={
+        "key": PIXABAY_API_KEY, "q": query, "per_page": 100,
+        "safesearch": "true", "order": "popular"})
+    r.raise_for_status()
+    must = SATISFYING.get(query, ([w for w in query.split()], []))[0]
+    good = []
+    for h in r.json().get("hits", []):
+        tags = {t.strip().lower() for t in h.get("tags", "").split(",")}
+        words = set(" ".join(tags).split())
+        if f"pb{h['id']}" in history["pexels_ids"] or h.get("duration", 0) < 5:
+            continue
+        if words & BANNED_TAGS:
+            continue
+        if not any(m in words or m in " ".join(tags) for m in must):
+            continue
+        good.append(h)
+    return good
+
+
 def get_pixabay_video(query, history, workdir):
     if not PIXABAY_API_KEY:
         raise RuntimeError("PIXABAY_API_KEY مفقود")
-    r = requests.get("https://pixabay.com/api/videos/", timeout=30, params={
-        "key": PIXABAY_API_KEY, "q": query, "per_page": 50,
-        "safesearch": "true", "video_type": "film"})
-    r.raise_for_status()
-    hits = [h for h in r.json().get("hits", [])
-            if f"pb{h['id']}" not in history["pexels_ids"] and h.get("duration", 0) >= 5]
-    if not hits:
-        # نجرب بأول كلمة بس إذا البحث ضيق
-        short = query.split()[0]
-        if short != query:
-            return get_pixabay_video(short, history, workdir)
-        raise RuntimeError(f"ما لقينا فيديو لـ: {query}")
+    # نجرب البحث المطلوب، وإذا ما لگينا شي مناسب نجرب غيره من القائمة
+    others = [q for q in SATISFYING if q != query]
+    random.shuffle(others)
+    for q in [query] + others[:6]:
+        hits = search_pixabay(q, history)
+        log(f"بحث '{q}': {len(hits)} فيديو مناسب")
+        if hits:
+            break
+    else:
+        raise RuntimeError("ما لقينا فيديو satisfying مناسب")
 
     def pick_file(h):
         files = [f for f in h["videos"].values() if f.get("url")]
@@ -199,17 +239,16 @@ def get_pixabay_video(query, history, workdir):
         pool = vertical or files
         return max(pool, key=lambda f: f["width"] * f["height"]), bool(vertical)
 
-    # نفضّل الفيديوهات العمودية
     scored = [(h, *pick_file(h)) for h in hits]
     vertical = [x for x in scored if x[2]]
-    h, f, _ = random.choice((vertical or scored)[:10])
+    h, f, _ = random.choice((vertical or scored)[:12])
 
     path = workdir / "clip.mp4"
     download(f["url"], path)
     history["pexels_ids"].append(f"pb{h['id']}")
-    log(f"فيديو Pixabay #{h['id']} من {h['user']}")
+    log(f"فيديو Pixabay #{h['id']} | وسوم: {h.get('tags')}")
     return path, {"pixabay_id": h["id"], "author": h["user"], "url": h["pageURL"],
-                  "source": "Pixabay"}
+                  "source": "Pixabay", "query": q}
 
 
 def get_video(query, history, workdir):
@@ -344,6 +383,9 @@ def main():
 
     idea = get_idea(history)
     clip, video_credit = get_video(idea["pexels_query"], history, workdir)
+    if video_credit.get("query") and video_credit["query"] != idea["pexels_query"]:
+        # الفيديو تغيّر، فنخلي الأصوات تناسبه
+        idea["sounds"] = SATISFYING[video_credit["query"]][1]
     sounds, sound_credits = get_freesound(idea["sounds"], history, workdir)
     voice = make_whisper(idea.get("whisper", ""), workdir)
 
