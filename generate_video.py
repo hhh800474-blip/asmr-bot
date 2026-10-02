@@ -642,7 +642,7 @@ def build_video(clips, sounds, voice, out_path, seconds=None, hook=None, music=N
         vlabels.append(f"[v{i}]")
     joined = f"{''.join(vlabels)}concat=n={n}:v=1:a=0" if n > 1 else "[v0]null"
     # بدون تلاشي بالنهاية حتى الفيديو يلف (loop) بسلاسة ويعيدونه
-    parts.append(f"{joined},fade=t=in:st=0:d=0.15{hook_filter},format=yuv420p[v]")
+    parts.append(f"{joined}{hook_filter},format=yuv420p[v]")
 
     labels = []
     vols = [1.0, 0.6, 0.4]
