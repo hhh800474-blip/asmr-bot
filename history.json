@@ -4,14 +4,16 @@
     "The Smoothest Melt Ever 🍫",
     "The Sweetest Ice Freeze 🍯",
     "The Ultimate Grid Soap Slice 🧼",
-    "The Most Addictive Sand Slice Ever ⌛"
+    "The Most Addictive Sand Slice Ever ⌛",
+    "Where does all this foam go? 🌊"
   ],
   "pexels_ids": [
     "pb30470",
     "pb224387",
     "pb341085",
     "pb374358",
-    "pb339"
+    "pb339",
+    "pb169425"
   ],
   "freesound_ids": [
     181917,
@@ -20,6 +22,13 @@
     367823,
     399558,
     537180,
-    108271
+    108271,
+    785184,
+    453303,
+    810857
+  ],
+  "local_clips": [],
+  "hooks": [
+    "White foam dancing in the stream"
   ]
 }
