@@ -1,14 +1,13 @@
 """
-مولّد فيديوهات "هل تعلم" عن فوائد الأكل (عربي، بصوت)
------------------------------------------------------
-1) يختار فاكهة/أكلة ما انعرضت قبل
-2) Gemini يكتب السكربت (فوائد معروفة ومثبتة فقط)
-3) Edge-TTS يقرا كل جملة بصوت عربي (نعرف توقيت كل جملة بالضبط)
-4) Pixabay يجيب 3 صور للأكلة + زوم بطيء وانتقالات ناعمة
-5) عناوين عربية بالأحمر والأصفر متزامنة ويا الصوت + موسيقى خفيفة
+مولّد فيديوهات قناة "لمحة": معلومة سريعة بالعربي (≤ 15 ثانية)
+-------------------------------------------------------------
+1) يختار مجال بالتناوب (صحة، رياضة، جسم الإنسان، نفس، فضاء، حيوانات...)
+2) Gemini يختار موضوع جديد ويكتب معلومة صحيحة وبداية مختلفة كل مرة
+3) صوت عربي يتبدل كل مرة: بنت / شاب
+4) لقطات فيديو + صور من Pixabay مخلوطة، بزوم وانتقالات ناعمة
+5) عنوان أحمر/أصفر + نصوص متزامنة ويا الصوت + لوكو #لمحة ثابت بالزاوية
 
 التشغيل: python generate_facts.py
-الناتج:  output/<التاريخ>/video.mp4 + meta.json  (نفس اللي يقراه publish.py)
 """
 
 import asyncio
@@ -32,57 +31,18 @@ OUT_ROOT = BASE / "output"
 W, H = 1080, 1920
 
 PIXABAY_API_KEY = os.getenv("PIXABAY_API_KEY", "").strip()
-FACTS_VOICE = os.getenv("FACTS_VOICE", "ar-SA-HamedNeural")   # صوت نسائي: ar-SA-ZariyahNeural
+MAX_SECONDS = float(os.getenv("MAX_SECONDS", "15"))
+LOGO_TEXT = os.getenv("LOGO_TEXT", "#لمحة")
 FACTS_MUSIC_VOLUME = float(os.getenv("FACTS_MUSIC_VOLUME", "0.10"))
-PAGE_TAG = os.getenv("PAGE_TAG", "")   # نص صغير ثابت أسفل الشاشة (اختياري) مثل اسم الصفحة
+# الأصوات تتبدل بالترتيب: شاب، بنت، شاب، بنت...
+VOICES = [v.strip() for v in os.getenv(
+    "FACTS_VOICES", "ar-SA-HamedNeural,ar-SA-ZariyahNeural,ar-AE-HamdanNeural,ar-AE-FatimaNeural"
+).split(",") if v.strip()]
 
-# الاسم العربي : كلمة البحث بالإنجليزي : كلمات لازم تكون بوسوم الصورة
-FOODS = [
-    ("الشمام", "cantaloupe melon", ["melon", "cantaloupe"]),
-    ("التين", "figs", ["fig", "figs"]),
-    ("الرمان", "pomegranate", ["pomegranate"]),
-    ("البرتقال", "oranges fruit", ["orange", "oranges"]),
-    ("الموز", "bananas", ["banana", "bananas"]),
-    ("التفاح", "red apples", ["apple", "apples"]),
-    ("الفراولة", "strawberries", ["strawberry", "strawberries"]),
-    ("العنب", "grapes", ["grape", "grapes"]),
-    ("البطيخ", "watermelon", ["watermelon"]),
-    ("المانجو", "mango fruit", ["mango", "mangoes"]),
-    ("الكيوي", "kiwi fruit", ["kiwi"]),
-    ("الأناناس", "pineapple", ["pineapple"]),
-    ("التمر", "dates fruit", ["dates", "date"]),
-    ("الأفوكادو", "avocado", ["avocado"]),
-    ("الليمون", "lemons", ["lemon", "lemons"]),
-    ("الجوز", "walnuts", ["walnut", "walnuts"]),
-    ("اللوز", "almonds", ["almond", "almonds"]),
-    ("الفستق", "pistachios", ["pistachio", "pistachios"]),
-    ("الكرز", "cherries", ["cherry", "cherries"]),
-    ("التوت الأزرق", "blueberries", ["blueberry", "blueberries"]),
-    ("الخوخ", "peaches", ["peach", "peaches"]),
-    ("المشمش", "apricots", ["apricot", "apricots"]),
-    ("الجوافة", "guava", ["guava"]),
-    ("جوز الهند", "coconut", ["coconut"]),
-    ("البروكلي", "broccoli", ["broccoli"]),
-    ("الجزر", "carrots", ["carrot", "carrots"]),
-    ("الشمندر", "beetroot", ["beet", "beetroot", "beets"]),
-    ("السبانخ", "spinach", ["spinach"]),
-    ("الثوم", "garlic", ["garlic"]),
-    ("الزنجبيل", "ginger root", ["ginger"]),
-    ("الكركم", "turmeric", ["turmeric"]),
-    ("العسل", "honey", ["honey"]),
-    ("الشوفان", "oats", ["oats", "oatmeal"]),
-    ("الحمص", "chickpeas", ["chickpeas", "chickpea"]),
-    ("العدس", "lentils", ["lentils", "lentil"]),
-    ("البيض", "eggs", ["egg", "eggs"]),
-    ("زيت الزيتون", "olive oil", ["olive"]),
-    ("الزيتون", "olives", ["olive", "olives"]),
-    ("الطماطم", "tomatoes", ["tomato", "tomatoes"]),
-    ("الخيار", "cucumber", ["cucumber"]),
-    ("القرفة", "cinnamon", ["cinnamon"]),
-    ("الكمثرى", "pears", ["pear", "pears"]),
-    ("البرقوق", "plums", ["plum", "plums"]),
-    ("القرنبيط", "cauliflower", ["cauliflower"]),
-    ("الفلفل الحلو", "bell peppers", ["pepper", "peppers"]),
+CATEGORIES = [
+    "صحة وعادات يومية", "رياضة ولياقة", "جسم الإنسان", "علم النفس والسلوك", "النوم",
+    "تغذية وفوائد الأكل", "الفضاء والكون", "عالم الحيوان", "الطبيعة والأرض",
+    "علوم مدهشة", "الدماغ والذاكرة", "الماء والترطيب",
 ]
 
 
@@ -159,12 +119,14 @@ def draw_box_text(draw, text, f, cy, fg, bg, pad_x=40, pad_y=22, radius=22, stro
     return y1
 
 
-def render_intro(name, path):
+def render_intro(top, main, path):
     img = Image.new("RGBA", (W, H), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
-    bottom = draw_box_text(d, "هل تعلم أن تناول", font(78), 1180, "white", (214, 31, 38, 245))
-    draw_box_text(d, name, font(96), bottom + 95, (40, 10, 10), (255, 214, 0, 250))
-    add_page_tag(d)
+    bottom = draw_box_text(d, top, font(74), 1160, "white", (214, 31, 38, 245))
+    lines = wrap(d, main, font(92), 920)
+    y = bottom + 90
+    for line in lines[:2]:
+        y = draw_box_text(d, line, font(92), y, (40, 10, 10), (255, 214, 0, 250)) + 85
     img.save(path)
 
 
@@ -176,58 +138,74 @@ def render_fact(text, path, color=(255, 221, 0)):
     y = 1220 - (len(lines) - 1) * 60
     for line in lines:
         tw, th, b = measure(d, line, f)
-        # خلفية نص شفافة خفيفة حتى يبين على أي صورة
         d.rounded_rectangle([(W - tw) / 2 - 30, y - th / 2 - 18, (W + tw) / 2 + 30, y + th / 2 + 18],
-                            radius=18, fill=(0, 0, 0, 110))
+                            radius=18, fill=(0, 0, 0, 120))
         d.text(((W - tw) / 2 - b[0], y - th / 2 - b[1]), shape(line), font=f, fill=color,
                stroke_width=5, stroke_fill="black", **text_kw())
         y += th + 50
-    add_page_tag(d)
     img.save(path)
 
 
-def add_page_tag(d):
-    if PAGE_TAG:
-        f = font(40)
-        tw, th, b = measure(d, PAGE_TAG, f)
-        d.text(((W - tw) / 2 - b[0], H - 230), shape(PAGE_TAG), font=f, fill=(255, 255, 255, 200),
-               stroke_width=2, stroke_fill="black", **text_kw())
+def render_logo(path):
+    """لوكو #لمحة ثابت بالزاوية العليا اليمين"""
+    img = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
+    f = font(58)
+    tw, th, b = measure(d, LOGO_TEXT, f)
+    x1, y0 = W - 50, 250
+    x0, y1 = x1 - tw - 56, y0 + th + 36
+    d.rounded_rectangle([x0, y0, x1, y1], radius=(y1 - y0) // 2, fill=(214, 31, 38, 225))
+    d.text((x0 + 28 - b[0], y0 + 18 - b[1]), shape(LOGO_TEXT), font=f, fill="white", **text_kw())
+    img.save(path)
 
 
 # ------------------------- السكربت -------------------------
-def pick_food(history):
-    used = history.setdefault("foods", [])
-    fresh = [f for f in FOODS if f[0] not in used[-35:]]
-    return random.choice(fresh or FOODS)
+def write_script(history):
+    cats = history.setdefault("fact_categories", [])
+    cat = next((c for c in random.sample(CATEGORIES, len(CATEGORIES)) if c not in cats[-6:]),
+               random.choice(CATEGORIES))
+    topics = history.setdefault("fact_topics", [])[-60:]
+    openings = history.setdefault("fact_openings", [])[-12:]
+    prompt = f"""أنت كاتب لقناة "لمحة" التي تنشر معلومة سريعة ومدهشة بالعربي في فيديو قصير جداً (أقل من 15 ثانية).
+المجال هذه المرة: {cat}
+اختر موضوعاً محدداً جديداً داخل هذا المجال، مختلفاً عن هذه المواضيع السابقة: {topics}
 
+قواعد الدقة (مهمة جداً):
+- معلومات صحيحة ومعروفة علمياً فقط. إذا لم تكن متأكداً فاختر موضوعاً آخر.
+- ممنوع ادعاء أن شيئاً يعالج أو يشفي أو يمنع مرضاً. استخدم: يساعد، يدعم، قد، يرتبط بـ.
+- لا أرقام مبالغ فيها.
 
-def write_script(name):
-    prompt = f"""اكتب سكربت فيديو قصير (20-30 ثانية) لصفحة "هل تعلم" عن فوائد تناول {name}.
-قواعد مهمة جداً:
-- استخدم فقط معلومات غذائية معروفة ومتفق عليها (فيتامينات، ألياف، مضادات أكسدة، ترطيب، طاقة...).
-- ممنوع تماماً ادعاء أنه يعالج أو يشفي أو يمنع أي مرض. استخدم كلمات مثل: يساعد، يدعم، غني بـ، مصدر جيد لـ.
-- لا أرقام أو نسب مبالغ فيها، ولا كميات علاجية.
-- عربية فصحى بسيطة وقريبة، جمل قصيرة وواضحة.
-أرجع JSON فقط بهذه المفاتيح:
-- intro_say: جملة تبدأ بـ "هل تعلم أن تناول {name}" (أقل من 12 كلمة) وتنتهي بسؤال يشد
-- facts: قائمة من 3 عناصر، كل عنصر فيه:
-    screen: نص الشاشة (3-6 كلمات)
-    say: الجملة المنطوقة (8-16 كلمة)
-- outro_say: جملة ختام قصيرة تطلب المتابعة (أقل من 8 كلمات)
-- title: عنوان جذاب أقل من 60 حرف مع إيموجي واحد
+قواعد الأسلوب:
+- البداية يجب أن تكون مختلفة تماماً عن هذه البدايات السابقة: {openings}
+- لا تبدأ بـ "هل تعلم". نوّع: سؤال مفاجئ، رقم مدهش، "تخيل أن..."، معلومة صادمة، "لماذا..."، "سر..."، تحدي، مقارنة.
+- عربية فصحى بسيطة وجمل قصيرة جداً. لا تطلب المتابعة ولا الاشتراك.
+
+أرجع JSON فقط:
+- topic: الموضوع بكلمتين
+- headline_top: سطر علوي قصير (2-4 كلمات) يناسب البداية، مثل "سر لا يعرفه كثيرون" أو "لماذا يحدث"
+- headline_main: الكلمة الأساسية للموضوع (1-3 كلمات)
+- intro_say: جملة البداية المنطوقة (5-9 كلمات)
+- facts: قائمة من عنصرين، كل عنصر: screen (3-6 كلمات للشاشة) و say (6-11 كلمة منطوقة)
+- pixabay_query: كلمتان بالإنجليزية لصورة/فيديو يعبر عن الموضوع بصرياً (شيء ملموس، بدون وجوه)
+- title: عنوان أقل من 60 حرف مع إيموجي واحد
 - description: جملة واحدة
-- hashtags: 5 هاشتاغات عربية"""
+- hashtags: 4 هاشتاغات عربية"""
     res = gv.gemini_json(prompt)
-    if not res or not res.get("facts"):
+    if not res or not res.get("facts") or not res.get("intro_say"):
         raise RuntimeError("Gemini ما رجّع سكربت")
-    res["facts"] = [f for f in res["facts"] if f.get("say") and f.get("screen")][:3]
+    res["facts"] = [f for f in res["facts"] if f.get("say") and f.get("screen")][:2]
     if not res["facts"]:
         raise RuntimeError("السكربت ناقص")
-    res.setdefault("intro_say", f"هل تعلم أن تناول {name} مفيد جداً لجسمك؟")
-    res.setdefault("outro_say", "تابعنا لمعرفة المزيد")
-    res.setdefault("title", f"فوائد {name} 🍃")
-    res.setdefault("description", f"أهم فوائد تناول {name}.")
-    res.setdefault("hashtags", ["#هل_تعلم", "#فوائد", "#صحة", "#تغذية", "#معلومات"])
+    res.setdefault("topic", cat)
+    res.setdefault("headline_top", "معلومة سريعة")
+    res.setdefault("headline_main", res["topic"])
+    res.setdefault("pixabay_query", "nature")
+    res.setdefault("title", f"{res['topic']} ✨")
+    res.setdefault("description", res["intro_say"])
+    tags = [t if t.startswith("#") else "#" + t.replace(" ", "_") for t in res.get("hashtags", [])][:4]
+    res["hashtags"] = [LOGO_TEXT] + [t for t in tags if t != LOGO_TEXT]
+    res["category"] = cat
+    log(f"المجال: {cat} | الموضوع: {res['topic']} | البداية: {res['intro_say']}")
     return res
 
 
@@ -238,104 +216,166 @@ def duration(p):
     return float(out.stdout.strip() or 0)
 
 
-def tts_lines(lines, workdir):
-    """كل جملة لوحدها حتى نعرف وقتها بالضبط، وبعدين نلصقهن"""
+def pick_voice(history):
+    i = history.get("voice_counter", [0])
+    i = i[0] if isinstance(i, list) and i else 0
+    history["voice_counter"] = [i + 1]
+    return VOICES[i % len(VOICES)]
+
+
+def tts_lines(lines, voice, workdir):
+    """كل جملة لوحدها حتى نعرف وقتها بالضبط"""
     import edge_tts
-    wavs, durs = [], []
+    raw = []
     for i, text in enumerate(lines):
         mp3 = workdir / f"line{i}.mp3"
+        asyncio.run(edge_tts.Communicate(text, voice, rate="+8%").save(str(mp3)))
+        raw.append(mp3)
+    gaps = [0.25] * (len(lines) - 1) + [0.5]
+    total = sum(duration(m) for m in raw) + sum(gaps)
+    # إذا أطول من الحد نسرّعه شوية (لحد 20%)
+    tempo = min(1.2, max(1.0, total / (MAX_SECONDS - 0.2)))
+    wavs, durs = [], []
+    for i, mp3 in enumerate(raw):
         wav = workdir / f"line{i}.wav"
-        asyncio.run(edge_tts.Communicate(text, FACTS_VOICE, rate="+5%").save(str(mp3)))
-        gap = 0.35 if i < len(lines) - 1 else 0.8
-        subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", str(mp3),
-                        "-af", f"apad=pad_dur={gap}", "-ar", "44100", "-ac", "2", str(wav)], check=True)
+        subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", str(mp3), "-af",
+                        f"atempo={tempo:.3f},apad=pad_dur={gaps[i]}", "-ar", "44100", "-ac", "2",
+                        str(wav)], check=True)
         wavs.append(wav)
         durs.append(duration(wav))
     lst = workdir / "voice_list.txt"
     lst.write_text("".join(f"file '{w.name}'\n" for w in wavs), encoding="utf-8")
-    voice = workdir / "voice.wav"
+    out = workdir / "voice.wav"
     subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-f", "concat", "-safe", "0",
-                    "-i", str(lst), "-c", "copy", str(voice)], check=True, cwd=workdir)
-    log(f"الصوت جاهز: {sum(durs):.1f} ثانية")
-    return voice, durs
+                    "-i", str(lst), "-c", "copy", str(out)], check=True, cwd=workdir)
+    log(f"الصوت: {voice} | {sum(durs):.1f} ثانية | سرعة {tempo:.2f}")
+    return out, durs
 
 
-# ------------------------- الصور -------------------------
-def get_images(query, must, history, workdir, n=3):
+# ------------------------- اللقطات (فيديو + صور) -------------------------
+BAD = ("woman", "man", "girl", "boy", "people", "person", "face", "portrait", "selfie")
+
+
+def relevant(tags, words):
+    tags = tags.lower()
+    return any(w in tags for w in words) and not any(b in tags for b in BAD)
+
+
+def pixabay_videos(query, words, used):
+    r = requests.get("https://pixabay.com/api/videos/", timeout=30, params={
+        "key": PIXABAY_API_KEY, "q": query, "per_page": 50, "safesearch": "true"})
+    r.raise_for_status()
+    return [h for h in r.json().get("hits", [])
+            if f"pb{h['id']}" not in used and relevant(h.get("tags", ""), words)
+            and h.get("duration", 0) >= 4]
+
+
+def pixabay_images(query, words, used):
+    r = requests.get("https://pixabay.com/api/", timeout=30, params={
+        "key": PIXABAY_API_KEY, "q": query, "image_type": "photo", "per_page": 60,
+        "safesearch": "true", "order": "popular"})
+    r.raise_for_status()
+    return [h for h in r.json().get("hits", [])
+            if f"img{h['id']}" not in used and relevant(h.get("tags", ""), words)]
+
+
+def get_media(query, history, workdir, n=3):
     if not PIXABAY_API_KEY:
         raise RuntimeError("PIXABAY_API_KEY مفقود")
-    used = set(history.setdefault("pixabay_images", []))
-    hits = []
-    for orient in ("vertical", "all"):
-        r = requests.get("https://pixabay.com/api/", timeout=30, params={
-            "key": PIXABAY_API_KEY, "q": query, "image_type": "photo", "orientation": orient,
-            "per_page": 80, "safesearch": "true", "order": "popular"})
-        r.raise_for_status()
-        for h in r.json().get("hits", []):
-            tags = h.get("tags", "").lower()
-            if h["id"] in used or not any(m in tags for m in must):
-                continue
-            if any(b in tags for b in ("woman", "man", "girl", "boy", "people", "person", "face")):
-                continue
-            hits.append(h)
-        if len(hits) >= n:
+    used = set(map(str, history.setdefault("pexels_ids", [])))
+    words = [w.lower() for w in query.split() if len(w) > 2] or [query.lower()]
+    queries = [query] + [w for w in words if w != query.lower()]
+    vids, imgs = [], []
+    for q in queries:
+        if not vids:
+            vids = pixabay_videos(q, words, used)
+        if not imgs:
+            imgs = pixabay_images(q, words, used)
+        if vids and imgs:
             break
-    if not hits:
-        raise RuntimeError(f"ما لگينا صور لـ {query}")
-    random.shuffle(hits)
-    paths = []
-    for i, h in enumerate(hits[:n]):
-        p = workdir / f"img{i}.jpg"
-        gv.download(h["largeImageURL"], p)
-        paths.append(p)
-        history["pixabay_images"].append(h["id"])
-    log(f"صور: {len(paths)}")
-    while len(paths) < n:           # إذا قليلة نعيد نفس الصورة بزوم مختلف
-        paths.append(paths[len(paths) % max(1, len(paths))])
-    return paths, ", ".join(dict.fromkeys(h["user"] for h in hits[:n]))
+    random.shuffle(vids)
+    random.shuffle(imgs)
+    # نخلط: فيديو، صورة، فيديو (أو الموجود)
+    plan = []
+    for kind in ("video", "image", "video", "image"):
+        src = vids if kind == "video" else imgs
+        if src:
+            plan.append((kind, src.pop(0)))
+        if len(plan) == n:
+            break
+    while len(plan) < n and (vids or imgs):
+        plan.append(("video", vids.pop(0)) if vids else ("image", imgs.pop(0)))
+    if not plan:
+        raise RuntimeError(f"ما لگينا لقطات لـ {query}")
+
+    media, authors = [], []
+    for i, (kind, h) in enumerate(plan):
+        if kind == "video":
+            files = [f for f in h["videos"].values() if f.get("url")]
+            vert = [f for f in files if f["height"] > f["width"]]
+            f = max(vert or files, key=lambda f: f["width"] * f["height"]
+                    if f["width"] * f["height"] <= 1920 * 1920 else 0)
+            p = workdir / f"m{i}.mp4"
+            gv.download(f["url"], p)
+            history["pexels_ids"].append(f"pb{h['id']}")
+        else:
+            p = workdir / f"m{i}.jpg"
+            gv.download(h["largeImageURL"], p)
+            history["pexels_ids"].append(f"img{h['id']}")
+        media.append((kind, p))
+        authors.append(h["user"])
+    log("اللقطات: " + ", ".join(k for k, _ in media))
+    while len(media) < n:
+        media.append(media[len(media) % len(media)])
+    return media, ", ".join(dict.fromkeys(authors))
 
 
 # ------------------------- التركيب -------------------------
-def build(images, voice, durs, overlays, music, out):
+def build(media, voice, durs, overlays, logo, music, out):
     D = sum(durs)
-    n = len(images)
-    X = 0.5                                   # مدة الانتقال بين الصور
-    L = D / n + X * (n - 1) / n               # طول كل صورة
+    n = len(media)
+    X = 0.4
+    L = D / n + X * (n - 1) / n
     frames = int(L * 30) + 1
 
     cmd = ["ffmpeg", "-y", "-loglevel", "error"]
-    for img in images:
-        cmd += ["-i", str(img)]
+    for kind, p in media:
+        cmd += (["-stream_loop", "-1", "-i", str(p)] if kind == "video" else ["-i", str(p)])
     for ov, _, _ in overlays:
         cmd += ["-i", str(ov)]
-    vi = n + len(overlays)
-    cmd += ["-i", str(voice)]
+    li = n + len(overlays)
+    cmd += ["-i", str(logo), "-i", str(voice)]
+    vi = li + 1
     if music:
         cmd += ["-stream_loop", "-1", "-i", str(music)]
 
+    look = "eq=brightness=-0.03:contrast=1.06:saturation=1.15"
     parts = []
-    for i in range(n):
-        zin = random.choice([True, False])
-        z = f"1+0.14*on/{frames}" if zin else f"1.14-0.14*on/{frames}"
-        parts.append(
-            f"[{i}:v]scale=1620:2880:force_original_aspect_ratio=increase,crop=1620:2880,"
-            f"zoompan=z='{z}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d={frames}:s={W}x{H}:fps=30,"
-            f"eq=brightness=-0.04:contrast=1.06:saturation=1.15,trim=duration={L:.3f},"
-            f"setpts=PTS-STARTPTS,setsar=1[i{i}]")
+    for i, (kind, p) in enumerate(media):
+        if kind == "video":
+            parts.append(
+                f"[{i}:v]trim=duration={L:.3f},setpts=PTS-STARTPTS,"
+                f"scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},fps=30,"
+                f"{look},setsar=1[i{i}]")
+        else:
+            z = random.choice([f"1+0.14*on/{frames}", f"1.14-0.14*on/{frames}"])
+            parts.append(
+                f"[{i}:v]scale=1620:2880:force_original_aspect_ratio=increase,crop=1620:2880,"
+                f"zoompan=z='{z}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d={frames}:s={W}x{H}:fps=30,"
+                f"{look},trim=duration={L:.3f},setpts=PTS-STARTPTS,setsar=1[i{i}]")
     cur = "[i0]"
     for k in range(1, n):
-        off = k * (L - X)
-        parts.append(f"{cur}[i{k}]xfade=transition=fade:duration={X}:offset={off:.3f}[x{k}]")
+        parts.append(f"{cur}[i{k}]xfade=transition=fade:duration={X}:offset={k * (L - X):.3f}[x{k}]")
         cur = f"[x{k}]"
     for j, (_, a, b) in enumerate(overlays):
         parts.append(f"{cur}[{n + j}:v]overlay=0:0:enable='between(t,{a:.2f},{b:.2f})'[o{j}]")
         cur = f"[o{j}]"
-    parts.append(f"{cur}format=yuv420p[v]")
+    parts.append(f"{cur}[{li}:v]overlay=0:0,format=yuv420p[v]")
 
     fmt = "aformat=sample_rates=44100:channel_layouts=stereo"
     parts.append(f"[{vi}:a]{fmt},volume=1.25[vo]")
     if music:
-        parts.append(f"[{vi + 1}:a]{fmt},volume={FACTS_MUSIC_VOLUME},afade=t=out:st={D - 1.2:.2f}:d=1.2[mu]")
+        parts.append(f"[{vi + 1}:a]{fmt},volume={FACTS_MUSIC_VOLUME},afade=t=out:st={max(0, D - 1):.2f}:d=1[mu]")
         parts.append("[vo][mu]amix=inputs=2:duration=first:normalize=0,alimiter=limit=0.9[a]")
     else:
         parts.append("[vo]anull[a]")
@@ -354,34 +394,31 @@ def main():
     workdir = OUT_ROOT / datetime.now().strftime("%Y%m%d_%H%M%S")
     workdir.mkdir(parents=True, exist_ok=True)
 
-    name, query, must = pick_food(history)
-    log(f"الموضوع: {name}")
-    script = write_script(name)
+    script = write_script(history)
+    voice_name = pick_voice(history)
+    lines = [script["intro_say"]] + [f["say"] for f in script["facts"]]
+    voice, durs = tts_lines(lines, voice_name, workdir)
 
-    lines = [script["intro_say"]] + [f["say"] for f in script["facts"]] + [script["outro_say"]]
-    voice, durs = tts_lines(lines, workdir)
-
-    # توقيت كل نص على الشاشة = توقيت جملته بالصوت
-    overlays, t = [], 0.0
-    intro_png = workdir / "ov_intro.png"
-    render_intro(name, intro_png)
-    overlays.append((intro_png, 0, durs[0]))
+    # كل نص يطلع بنفس وقت جملته بالصوت
+    overlays = []
+    p = workdir / "ov_intro.png"
+    render_intro(script["headline_top"], script["headline_main"], p)
+    overlays.append((p, 0, durs[0]))
     t = durs[0]
     for i, f in enumerate(script["facts"]):
         p = workdir / f"ov_fact{i}.png"
         render_fact(f["screen"], p)
         overlays.append((p, t, t + durs[i + 1]))
         t += durs[i + 1]
-    out_png = workdir / "ov_outro.png"
-    render_fact("تابعنا للمزيد", out_png, color=(255, 255, 255))
-    overlays.append((out_png, t, t + durs[-1]))
+    logo = workdir / "logo.png"
+    render_logo(logo)
 
-    images, author = get_images(query, must, history, workdir, n=3)
+    media, author = get_media(script["pixabay_query"], history, workdir, n=3)
     music, music_credit = gv.get_music(history, workdir) if gv.MUSIC_ENABLED else (None, None)
     video = workdir / "video.mp4"
-    build(images, voice, durs, overlays, music, video)
+    build(media, voice, durs, overlays, logo, music, video)
 
-    credits = f"\n\nصور: {author} (Pixabay)"
+    credits = f"\n\nلقطات: {author} (Pixabay)"
     if music_credit:
         credits += f"\nموسيقى: {music_credit['author']} (Freesound)"
     credits += "\nالصوت مولّد بالذكاء الاصطناعي. معلومات عامة وليست نصيحة طبية."
@@ -392,7 +429,8 @@ def main():
         "video_file": str(video),
         "ai_voice": True,
         "ai_generated": True,
-        "topic": name,
+        "topic": script["topic"],
+        "voice": voice_name,
         "created_at": datetime.now().isoformat(),
     }
     (workdir / "meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -400,7 +438,9 @@ def main():
         if f.name not in ("video.mp4", "meta.json"):
             f.unlink()
 
-    history.setdefault("foods", []).append(name)
+    history["fact_categories"].append(script["category"])
+    history["fact_topics"].append(script["topic"])
+    history["fact_openings"].append(script["intro_say"])
     history.setdefault("titles", []).append(script["title"])
     gv.save_history(history)
     log("✅ خلصنا")
