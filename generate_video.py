@@ -37,10 +37,14 @@ VIDEO_MIN_SECONDS = float(os.getenv("VIDEO_MIN_SECONDS", "7"))  # أقصر مد�
 HOOK_TEXT_ENABLED = os.getenv("HOOK_TEXT_ENABLED", "1") == "1"
 CONTENT_LANG = os.getenv("CONTENT_LANG", "en")             # en أو ar
 VOICE = os.getenv("VOICE", "en-US-AriaNeural")             # للعربي: ar-SA-ZariyahNeural
-VOICE_ENABLED = os.getenv("VOICE_ENABLED", "1") == "1"
+VOICE_ENABLED = os.getenv("VOICE_ENABLED", "0") == "1"      # الافتراضي: بدون كلام
+MUSIC_ENABLED = os.getenv("MUSIC_ENABLED", "1") == "1"      # موسيقى هادئة خفيفة بالخلفية
+MUSIC_VOLUME = float(os.getenv("MUSIC_VOLUME", "0.18"))
+CLIPS_ARE_AI = os.getenv("CLIPS_ARE_AI", "1") == "1"   # فيديوهات clips مولدة بالذكاء؟ (للإفصاح بالمنصات)
 
 BASE = Path(__file__).parent
 OUT_ROOT = BASE / "output"
+CLIPS_DIR = BASE / "clips"   # حط فيديوهاتك هنا (مصورة أو مولدة بالذكاء) وتنستخدم قبل Pixabay
 HISTORY_FILE = BASE / "history.json"
 
 # قائمة البحث المسموحة: لقطات satisfying فقط (Gemini يختار منها)
@@ -108,8 +112,11 @@ def download(url, path, headers=None):
 
 
 # ------------------------- 1) الفكرة -------------------------
-def get_idea(history):
+def get_idea(history, forced_theme=None):
     preset = random.choice(PRESETS)
+    if forced_theme:
+        preset = {"theme": forced_theme, "pexels_query": forced_theme,
+                  "sounds": ["crunch", "squish"], "hook": random.choice(HOOKS)}
     fallback = {
         **preset,
         "hook": preset.get("hook", "Wait for it..."),
@@ -123,18 +130,20 @@ def get_idea(history):
         return fallback
 
     lang_note = "Arabic" if CONTENT_LANG == "ar" else "English"
+    forced = (f"IMPORTANT: the video is already filmed and shows: '{forced_theme}'. "
+              f"Write theme, sounds, hook and title to match it exactly.\n") if forced_theme else ""
     recent = history["titles"][-20:]
     prompt = f"""You create ideas for faceless ASMR short videos, max 15 seconds,
 designed so viewers watch until the very end and replay.
 Focus on crisp "oddly satisfying" triggers with a clear close-up action:
 cutting, crunching, pouring, dripping, tapping, peeling, squishing, crackling.
 Avoid repeating these recent titles: {recent}
-Return ONLY JSON with these keys:
+{forced}Return ONLY JSON with these keys:
 - theme: short scene in English
 - pexels_query: pick EXACTLY one from this list: {list(SATISFYING)}
 - sounds: list of 2 SIMPLE sound search terms, 1-2 common English words each (e.g. "crunch", "pouring water")
 - hook: on-screen text for the first 3 seconds, in English, max 6 words,
-  creates curiosity (e.g. "Wait for the last crunch..."), no emoji
+  creates curiosity, no emoji
 - title: curiosity title in {lang_note}, max 60 chars, 1 emoji
 - description: 1 short sentence in {lang_note}
 - hashtags: 5 hashtags including #asmr and #satisfying
@@ -159,7 +168,9 @@ Return ONLY JSON with these keys:
             for key in fallback:
                 idea.setdefault(key, fallback[key])
             q = str(idea.get("pexels_query", "")).lower().strip()
-            if q not in SATISFYING:
+            if forced_theme:
+                q = forced_theme
+            elif q not in SATISFYING:
                 q = random.choice(list(SATISFYING))
                 log(f"Gemini اختار بحث مو بالقائمة، بدلناه بـ: {q}")
             idea["pexels_query"] = q
@@ -169,6 +180,97 @@ Return ONLY JSON with these keys:
             log(f"Gemini {model} فشل ({str(e)[:150]})")
     log("نستخدم فكرة جاهزة")
     return fallback
+
+
+# ------------------------- 1.5) النص التشويقي بعد ما نعرف الفيديو -------------------------
+HOOK_TEMPLATES = [
+    "Rate this {t} from 1 to 10", "POV: the most satisfying {t}", "Can you hear the {t}?",
+    "Sound on for this {t}", "Watch the very last second", "I could watch this forever",
+    "This {t} hits different", "Tell me this isn't satisfying", "Real or fake? Comment below",
+    "Your brain will thank you", "Instant calm in {n} seconds", "Don't skip the ending",
+    "Why is this so relaxing?", "Pure {t} therapy", "Headphones on, trust me",
+    "This is your sign to relax", "Only 1% watch till the end", "Replay it, I dare you",
+]
+
+
+def norm(h):
+    return " ".join("".join(c for c in h.lower() if c.isalnum() or c == " ").split())
+
+
+def is_repeat(hook, recent):
+    n = norm(hook)
+    first3 = " ".join(n.split()[:3])
+    for r in recent[-15:]:
+        rn = norm(r)
+        if n == rn or (first3 and first3 == " ".join(rn.split()[:3])):
+            return True
+    return False
+
+
+def template_hook(thing, seconds, recent):
+    pool = HOOK_TEMPLATES[:]
+    random.shuffle(pool)
+    for t in pool:
+        h = t.format(t=thing, n=int(seconds))
+        if not is_repeat(h, recent):
+            return h
+    return pool[0].format(t=thing, n=int(seconds))
+
+
+def gemini_json(prompt):
+    if not GEMINI_API_KEY:
+        return None
+    body = {"contents": [{"parts": [{"text": prompt}]}],
+            "generationConfig": {"responseMimeType": "application/json", "temperature": 1.2}}
+    for model in GEMINI_MODELS:
+        try:
+            r = requests.post(
+                f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+                json=body, timeout=90, headers={"x-goog-api-key": GEMINI_API_KEY})
+            if r.status_code in (404, 429, 500, 503):
+                continue
+            r.raise_for_status()
+            text = r.json()["candidates"][0]["content"]["parts"][0]["text"]
+            return json.loads(text.replace("```json", "").replace("```", "").strip())
+        except Exception as e:
+            log(f"Gemini {model}: {str(e)[:120]}")
+    return None
+
+
+def write_copy(idea, video_desc, seconds, history):
+    """يكتب الهوك والعنوان حسب الفيديو الحقيقي اللي انختار، وبدون تكرار"""
+    recent_hooks = history.setdefault("hooks", [])
+    thing = (idea.get("pexels_query") or "satisfying").replace(" macro", "").replace(" in water", "")
+    lang_note = "Arabic" if CONTENT_LANG == "ar" else "English"
+    prompt = f"""You write on-screen text for a {int(seconds)}-second faceless satisfying ASMR short.
+What the video ACTUALLY shows: {video_desc}
+Write about what is visible. Do NOT mention actions that are not in the video
+(e.g. no "slice" or "cut" unless the video shows cutting).
+Recent hooks you must NOT repeat or imitate (different wording AND different structure):
+{recent_hooks[-15:]}
+Pick ONE style at random: question, rating challenge, POV, real-vs-fake, dare, calm statement,
+counting, "sound on", emotional reaction. Do not start with "Wait for".
+Return ONLY JSON:
+- hook: English, max 6 words, no emoji
+- title: {lang_note}, max 60 chars, 1 emoji, curiosity
+- description: 1 short sentence in {lang_note}
+- hashtags: 5 hashtags including #asmr and #satisfying"""
+    for _ in range(2):
+        res = gemini_json(prompt)
+        if res and res.get("hook") and not is_repeat(res["hook"], recent_hooks):
+            for k in ("title", "description", "hashtags"):
+                if res.get(k):
+                    idea[k] = res[k]
+            idea["hook"] = res["hook"]
+            break
+    else:
+        idea["hook"] = template_hook(thing, seconds, recent_hooks)
+        log("استخدمنا هوك من القوالب")
+    if is_repeat(idea["hook"], recent_hooks):
+        idea["hook"] = template_hook(thing, seconds, recent_hooks)
+    recent_hooks.append(idea["hook"])
+    log(f"الهوك: {idea['hook']}")
+    return idea
 
 
 # ------------------------- 2) الفيديو -------------------------
@@ -249,7 +351,7 @@ def get_pixabay_video(query, history, workdir):
     history["pexels_ids"].append(f"pb{h['id']}")
     log(f"فيديو Pixabay #{h['id']} | وسوم: {h.get('tags')}")
     return path, {"pixabay_id": h["id"], "author": h["user"], "url": h["pageURL"],
-                  "source": "Pixabay", "query": q}
+                  "source": "Pixabay", "query": q, "tags": h.get("tags", "")}
 
 
 def get_video(query, history, workdir):
@@ -331,6 +433,54 @@ def get_freesound(queries, history, workdir, video_query=""):
     return paths, credits
 
 
+VIDEO_EXT = {".mp4", ".mov", ".webm", ".mkv", ".m4v"}
+
+
+def next_local_clip(history):
+    """أول فيديو بمجلد clips ما انستخدم قبل"""
+    used = set(history.setdefault("local_clips", []))
+    if not CLIPS_DIR.exists():
+        return None
+    files = sorted(f for f in CLIPS_DIR.iterdir()
+                   if f.suffix.lower() in VIDEO_EXT and f.name not in used)
+    return files[0] if files else None
+
+
+def theme_from_name(path):
+    name = path.stem.replace("-", " ").replace("_", " ")
+    return " ".join(w for w in name.split() if not w.isdigit()).strip() or "satisfying asmr"
+
+
+def has_audio(path):
+    out = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "a",
+                          "-show_entries", "stream=index", "-of", "csv=p=0", str(path)],
+                         capture_output=True, text=True)
+    return bool(out.stdout.strip())
+
+
+MUSIC_TERMS = ["calm piano loop", "lofi loop", "music box", "ambient pad", "soft piano"]
+
+
+def get_music(history, workdir):
+    if not MUSIC_ENABLED or not FREESOUND_API_KEY:
+        return None, None
+    terms = MUSIC_TERMS[:]
+    random.shuffle(terms)
+    for t in terms:
+        try:
+            res = freesound_search(t, history, 20)
+        except Exception:
+            continue
+        if res:
+            m = random.choice(res[:10])
+            p = workdir / "music.mp3"
+            download(m["previews"]["preview-hq-mp3"], p)
+            history["freesound_ids"].append(m["id"])
+            log(f"موسيقى: {m['name']}")
+            return p, {"freesound_id": m["id"], "name": m["name"], "author": m["username"]}
+    return None, None
+
+
 # ------------------------- 4) الهمس -------------------------
 def make_whisper(text, workdir):
     if not VOICE_ENABLED or not text:
@@ -376,7 +526,7 @@ def choose_duration(clip):
     return round(max(target, min(VIDEO_MIN_SECONDS, VIDEO_SECONDS)), 1)
 
 
-def build_video(clip, sounds, voice, out_path, seconds=None, hook=None):
+def build_video(clip, sounds, voice, out_path, seconds=None, hook=None, music=None):
     D = seconds or choose_duration(clip)
     log(f"مدة الفيديو: {D} ثانية")
     hook_filter = ""
@@ -398,6 +548,9 @@ def build_video(clip, sounds, voice, out_path, seconds=None, hook=None):
         cmd += ["-stream_loop", "-1", "-i", str(s)]
     if voice:
         cmd += ["-i", str(voice)]
+    if music:
+        cmd += ["-stream_loop", "-1", "-i", str(music)]
+    clip_audio = has_audio(clip)
 
     fmt = "aformat=sample_rates=44100:channel_layouts=stereo"
     parts = [
@@ -409,6 +562,11 @@ def build_video(clip, sounds, voice, out_path, seconds=None, hook=None):
     ]
     labels = []
     vols = [1.0, 0.6, 0.4]
+    if clip_audio:
+        # الصوت الأصلي للمقطع (إذا مصور أو مولد بصوت) هو الأهم، والأصوات الثانية أخف
+        parts.append(f"[0:a]{fmt},volume=1.0[ca]")
+        labels.append("[ca]")
+        vols = [0.35, 0.25, 0.2]
     for i in range(len(sounds)):
         parts.append(f"[{i+1}:a]{fmt},volume={vols[i]}[a{i}]")
         labels.append(f"[a{i}]")
@@ -418,6 +576,10 @@ def build_video(clip, sounds, voice, out_path, seconds=None, hook=None):
             f"[{vi}:a]{fmt},highpass=f=100,lowpass=f=9000,"
             f"aecho=0.8:0.6:45:0.2,volume=1.8,adelay=400|400[vo]")
         labels.append("[vo]")
+    if music:
+        mi = len(sounds) + 1 + (1 if voice else 0)
+        parts.append(f"[{mi}:a]{fmt},volume={MUSIC_VOLUME}[mu]")
+        labels.append("[mu]")
     parts.append(
         f"{''.join(labels)}amix=inputs={len(labels)}:duration=longest:normalize=0,"
         f"afade=t=in:st=0:d=0.15,afade=t=out:st={D-0.4}:d=0.4,alimiter=limit=0.85[a]")
@@ -438,19 +600,44 @@ def main():
     workdir = OUT_ROOT / datetime.now().strftime("%Y%m%d_%H%M%S")
     workdir.mkdir(parents=True, exist_ok=True)
 
-    idea = get_idea(history)
-    clip, video_credit = get_video(idea["pexels_query"], history, workdir)
-    if video_credit.get("query") and video_credit["query"] != idea["pexels_query"]:
+    local = next_local_clip(history)
+    if local:
+        theme = theme_from_name(local)
+        log(f"نستخدم فيديو من مجلد clips: {local.name} ({theme})")
+        idea = get_idea(history, forced_theme=theme)
+        clip = local
+        video_credit = {"author": "Original", "source": "own clip", "query": None}
+        history["local_clips"].append(local.name)
+    else:
+        idea = get_idea(history)
+        clip, video_credit = get_video(idea["pexels_query"], history, workdir)
+    if video_credit.get("query") and video_credit["query"] != idea["pexels_query"] \
+            and video_credit["query"] in SATISFYING:
         # الفيديو تغيّر، فنخلي الأصوات تناسبه
         idea["sounds"] = SATISFYING[video_credit["query"]][1]
+        idea["pexels_query"] = video_credit["query"]
     sounds, sound_credits = get_freesound(idea["sounds"], history, workdir,
-                                         video_credit.get("query", idea["pexels_query"]))
+                                         video_credit.get("query") or idea["pexels_query"])
     voice = make_whisper(idea.get("whisper", ""), workdir)
+    music, music_credit = get_music(history, workdir)
 
-    video_path = build_video(clip, sounds, voice, workdir / "video.mp4", hook=idea.get("hook"))
+    seconds = choose_duration(clip)
+    video_desc = video_credit.get("tags") or idea.get("pexels_query") or idea.get("theme")
+    if video_credit.get("source") == "own clip":
+        video_desc = idea.get("theme") or idea.get("pexels_query")
+    idea = write_copy(idea, f"{video_desc} (category: {idea.get('pexels_query')})", seconds, history)
 
-    credits_text = f"\n\nVideo: {video_credit['author']} ({video_credit['source']})"
+    video_path = build_video(clip, sounds, voice, workdir / "video.mp4", seconds=seconds,
+                             hook=idea.get("hook"), music=music)
+
+    credits_text = ""
+    if video_credit["source"] != "own clip":
+        credits_text += f"\n\nVideo: {video_credit['author']} ({video_credit['source']})"
+    else:
+        credits_text += "\n"
     credits_text += "".join(f"\nSound: {c['author']} (Freesound)" for c in sound_credits)
+    if music_credit:
+        credits_text += f"\nMusic: {music_credit['author']} (Freesound)"
     if voice:
         credits_text += "\nVoice: AI-generated"
     meta = {
@@ -459,6 +646,7 @@ def main():
         "hashtags": idea["hashtags"],
         "video_file": str(video_path),
         "ai_voice": bool(voice),
+        "ai_generated": bool(voice) or (local is not None and CLIPS_ARE_AI),
         "credits": {"video": video_credit, "sounds": sound_credits},
         "created_at": datetime.now().isoformat(),
     }
