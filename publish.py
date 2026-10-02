@@ -27,6 +27,7 @@ CLOUDINARY_URL = os.getenv("CLOUDINARY_URL", "").strip()
 PLATFORMS = [p.strip() for p in os.getenv("PUBLISH_PLATFORMS", "youtube,tiktok,facebook").split(",") if p.strip()]
 YOUTUBE_CATEGORY = os.getenv("YOUTUBE_CATEGORY", "24")   # 24 = Entertainment
 BUFFER_URL = "https://api.buffer.com"
+VIDEO_URL = os.getenv("VIDEO_URL", "").strip()   # رابط GitHub Pages من ملف التشغيل
 OUT_ROOT = Path(__file__).parent / "output"
 
 
@@ -89,21 +90,42 @@ def upload_litterbox(video_path):
     return url
 
 
-def url_works(url):
-    try:
-        r = requests.get(url, stream=True, timeout=60, headers={"Range": "bytes=0-1023"})
-        ok = r.status_code in (200, 206)
-        r.close()
-        return ok
-    except Exception:
-        return False
+def upload_uguu(video_path):
+    """استضافة مؤقتة (3 ساعات) كخطة احتياطية"""
+    with open(video_path, "rb") as f:
+        r = requests.post("https://uguu.se/upload", timeout=300,
+                          files={"files[]": (video_path.name, f, "video/mp4")})
+    r.raise_for_status()
+    return r.json()["files"][0]["url"]
+
+
+def url_works(url, tries=1, wait=10):
+    for i in range(tries):
+        try:
+            r = requests.get(url, stream=True, timeout=60, headers={"Range": "bytes=0-1023"})
+            ok = r.status_code in (200, 206)
+            r.close()
+            if ok:
+                return True
+        except Exception:
+            pass
+        if i < tries - 1:
+            time.sleep(wait)
+    return False
 
 
 def upload_media(video_path):
+    # الطريقة الأساسية: الفيديو منشور على GitHub Pages من ملف التشغيل
+    if VIDEO_URL:
+        log(f"نتأكد من رابط GitHub Pages: {VIDEO_URL}")
+        if url_works(VIDEO_URL, tries=12, wait=10):
+            log("✅ الرابط شغال")
+            return VIDEO_URL
+        log("رابط GitHub Pages ما اشتغل، نجرب استضافات ثانية")
     hosts = []
     if CLOUDINARY_URL:
         hosts.append(("Cloudinary", upload_cloudinary))
-    hosts += [("catbox", upload_catbox), ("litterbox", upload_litterbox)]
+    hosts += [("catbox", upload_catbox), ("litterbox", upload_litterbox), ("uguu", upload_uguu)]
     for name, fn in hosts:
         try:
             url = fn(video_path)
