@@ -2,11 +2,12 @@ name: ASMR Daily Video
 
 on:
   schedule:
-    - cron: "0 6 * * *"
-    - cron: "0 9 * * *"
-    - cron: "0 12 * * *"
-    - cron: "0 15 * * *"
-    - cron: "0 18 * * *"
+    - cron: "0 7 * * *"    # 10:00 الصبح
+    - cron: "0 10 * * *"   # 1:00 الظهر
+    - cron: "0 13 * * *"   # 4:00 العصر
+    - cron: "0 15 * * *"   # 6:00 العصر
+    - cron: "0 18 * * *"   # 9:00 بالليل
+    - cron: "0 20 * * *"   # 11:00 بالليل
   workflow_dispatch:
 
 permissions:
