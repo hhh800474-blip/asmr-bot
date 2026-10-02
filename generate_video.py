@@ -23,11 +23,14 @@ from pathlib import Path
 import requests
 
 # ------------------------- الإعدادات -------------------------
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
-PEXELS_API_KEY = os.getenv("PEXELS_API_KEY", "")
-PIXABAY_API_KEY = os.getenv("PIXABAY_API_KEY", "")
-FREESOUND_API_KEY = os.getenv("FREESOUND_API_KEY", "")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()  # strip يشيل المسافات والأسطر الزايدة
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "").strip()
+# نجرب الموديلات بالترتيب، إذا واحد انلغى ينتقل للي بعده
+GEMINI_MODELS = [m for m in [GEMINI_MODEL, "gemini-flash-latest", "gemini-3-flash-preview",
+                              "gemini-2.5-flash", "gemini-flash-lite-latest"] if m]
+PEXELS_API_KEY = os.getenv("PEXELS_API_KEY", "").strip()  # strip يشيل المسافات والأسطر الزايدة
+PIXABAY_API_KEY = os.getenv("PIXABAY_API_KEY", "").strip()  # strip يشيل المسافات والأسطر الزايدة
+FREESOUND_API_KEY = os.getenv("FREESOUND_API_KEY", "").strip()  # strip يشيل المسافات والأسطر الزايدة
 
 VIDEO_SECONDS = int(os.getenv("VIDEO_SECONDS", "15"))      # قصير = نسبة مشاهدة كاملة أعلى
 HOOK_TEXT_ENABLED = os.getenv("HOOK_TEXT_ENABLED", "1") == "1"
@@ -121,25 +124,29 @@ Return ONLY JSON with these keys:
 - whisper: ONE whispered line in {lang_note}, 6-10 words, builds anticipation,
   use "..." for pauses"""
 
-    try:
-        url = (f"https://generativelanguage.googleapis.com/v1beta/models/"
-               f"{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}")
-        body = {
-            "contents": [{"parts": [{"text": prompt}]}],
-            "generationConfig": {"responseMimeType": "application/json",
-                                 "temperature": 1.0},
-        }
-        r = requests.post(url, json=body, timeout=60)
-        r.raise_for_status()
-        text = r.json()["candidates"][0]["content"]["parts"][0]["text"]
-        idea = json.loads(text.replace("```json", "").replace("```", "").strip())
-        for key in fallback:
-            idea.setdefault(key, fallback[key])
-        log(f"الفكرة: {idea['title']}")
-        return idea
-    except Exception as e:
-        log(f"Gemini فشل ({e})، نستخدم فكرة جاهزة")
-        return fallback
+    body = {
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {"responseMimeType": "application/json", "temperature": 1.0},
+    }
+    for model in GEMINI_MODELS:
+        try:
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+            r = requests.post(url, json=body, timeout=90,
+                              headers={"x-goog-api-key": GEMINI_API_KEY})
+            if r.status_code == 404:
+                log(f"الموديل {model} غير متوفر، نجرب اللي بعده")
+                continue
+            r.raise_for_status()
+            text = r.json()["candidates"][0]["content"]["parts"][0]["text"]
+            idea = json.loads(text.replace("```json", "").replace("```", "").strip())
+            for key in fallback:
+                idea.setdefault(key, fallback[key])
+            log(f"الفكرة ({model}): {idea['title']}")
+            return idea
+        except Exception as e:
+            log(f"Gemini {model} فشل ({str(e)[:150]})")
+    log("نستخدم فكرة جاهزة")
+    return fallback
 
 
 # ------------------------- 2) الفيديو -------------------------
