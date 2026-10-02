@@ -29,8 +29,8 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install FFmpeg
-        run: sudo apt-get update && sudo apt-get install -y ffmpeg fonts-dejavu-core
+      - name: Install FFmpeg and Arabic fonts
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg fonts-dejavu-core fonts-noto-core libraqm0 libfribidi0
 
       - name: Install packages
         run: pip install -r requirements.txt
@@ -40,9 +40,8 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           PIXABAY_API_KEY: ${{ secrets.PIXABAY_API_KEY }}
           FREESOUND_API_KEY: ${{ secrets.FREESOUND_API_KEY }}
-          VIDEO_SECONDS: "15"
-          CONTENT_LANG: "en"
-        run: python generate_video.py
+          FACTS_VOICE: "ar-SA-HamedNeural"
+        run: python generate_facts.py
 
       - name: Save video for download
         uses: actions/upload-artifact@v4
