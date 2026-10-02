@@ -1,13 +1,10 @@
-name: ASMR Daily Video
+name: Lamha Daily Video
 
 on:
   schedule:
-    - cron: "0 7 * * *"    # 10:00 الصبح
-    - cron: "0 10 * * *"   # 1:00 الظهر
-    - cron: "0 13 * * *"   # 4:00 العصر
+    - cron: "0 12 * * *"   # 3:00 العصر بتوقيت بغداد
     - cron: "0 15 * * *"   # 6:00 العصر
     - cron: "0 18 * * *"   # 9:00 بالليل
-    - cron: "0 20 * * *"   # 11:00 بالليل
   workflow_dispatch:
 
 permissions:
@@ -40,7 +37,8 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           PIXABAY_API_KEY: ${{ secrets.PIXABAY_API_KEY }}
           FREESOUND_API_KEY: ${{ secrets.FREESOUND_API_KEY }}
-          FACTS_VOICE: "ar-SA-HamedNeural"
+          MAX_SECONDS: "15"
+          LOGO_TEXT: "#لمحة"
         run: python generate_facts.py
 
       - name: Save video for download
