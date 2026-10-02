@@ -9,11 +9,16 @@ on:
 
 permissions:
   contents: write
+  pages: write
+  id-token: write
 
 jobs:
   make-video:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
 
@@ -43,10 +48,27 @@ jobs:
           path: output/
           retention-days: 7
 
+      - name: Prepare video page
+        run: |
+          mkdir -p site
+          cp "$(ls -d output/*/ | tail -1)video.mp4" "site/v${{ github.run_id }}.mp4"
+          echo "ok" > site/index.html
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+      - name: Host video on GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
+
       - name: Publish
         env:
           BUFFER_API_KEY: ${{ secrets.BUFFER_API_KEY }}
           PUBLISH_PLATFORMS: "youtube,tiktok,facebook"
+          VIDEO_URL: ${{ steps.deployment.outputs.page_url }}v${{ github.run_id }}.mp4
         run: python publish.py
 
       - name: Save history
