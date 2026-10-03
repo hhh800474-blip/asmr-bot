@@ -1,11 +1,6 @@
 name: Lamha Daily Video
 
 on:
-  schedule:
-    - cron: "17 8 * * *"    # 11:17 الصبح بتوقيت بغداد
-    - cron: "17 12 * * *"   # 3:17 العصر
-    - cron: "17 15 * * *"   # 6:17 العصر
-    - cron: "17 18 * * *"   # 9:17 بالليل
   workflow_dispatch:
 
 permissions:
