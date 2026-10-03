@@ -31,7 +31,7 @@ OUT_ROOT = BASE / "output"
 W, H = 1080, 1920
 
 PIXABAY_API_KEY = os.getenv("PIXABAY_API_KEY", "").strip()
-MAX_SECONDS = float(os.getenv("MAX_SECONDS", "15"))
+MAX_SECONDS = float(os.getenv("MAX_SECONDS", "20"))
 LOGO_TEXT = os.getenv("LOGO_TEXT", "#لمحة")
 FACTS_MUSIC_VOLUME = float(os.getenv("FACTS_MUSIC_VOLUME", "0.10"))
 # الأصوات تتبدل بالترتيب: شاب، بنت، شاب، بنت...
@@ -145,9 +145,13 @@ def render_intro(top, main, path):
 def render_fact(text, path, color=(255, 221, 0)):
     img = Image.new("RGBA", (W, H), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
-    f = font(80)
-    lines = wrap(d, text, f, 900)
-    y = 1220 - (len(lines) - 1) * 60
+    # الجملة كاملة على الشاشة: نصغّر الخط إذا طويلة حتى ما تتجاوز 3 أسطر
+    for size in (74, 66, 58):
+        f = font(size)
+        lines = wrap(d, text, f, 920)
+        if len(lines) <= 3:
+            break
+    y = 1220 - (len(lines) - 1) * 55
     for line in lines:
         tw, th, b = measure(d, line, f)
         d.rounded_rectangle([(W - tw) / 2 - 30, y - th / 2 - 18, (W + tw) / 2 + 30, y + th / 2 + 18],
@@ -187,7 +191,7 @@ def write_script(history):
                random.choice(CATEGORIES))
     topics = history.setdefault("fact_topics", [])[-60:]
     openings = history.setdefault("fact_openings", [])[-12:]
-    prompt = f"""أنت كاتب لقناة "لمحة" التي تنشر معلومة سريعة ومدهشة بالعربي في فيديو قصير جداً (أقل من 15 ثانية).
+    prompt = f"""أنت كاتب لقناة "لمحة" التي تنشر معلومة سريعة بالعربي في فيديو قصير (من 10 إلى 20 ثانية حسب الحاجة).
 المجال هذه المرة: {cat}
 اختر موضوعاً محدداً جديداً داخل هذا المجال، مختلفاً عن هذه المواضيع السابقة: {topics}
 
@@ -196,26 +200,56 @@ def write_script(history):
 - ممنوع ادعاء أن شيئاً يعالج أو يشفي أو يمنع مرضاً. استخدم: يساعد، يدعم، قد، يرتبط بـ.
 - لا أرقام مبالغ فيها.
 
+قواعد الوضوح (أهم شي):
+- الفيديو لازم يكون مفهوم لأي شخص عادي من أول مرة، بدون مصطلحات علمية صعبة.
+- فكرة واحدة فقط، مكتملة: سؤال/بداية ← الجواب المباشر ← سبب أو توضيح بسيط.
+- الجملة الثانية لازم تجاوب على البداية بشكل صريح وواضح. لا ألغاز ولا معلومة ناقصة.
+- كل جملة لازم تكون مفهومة لو انقرت لوحدها.
+- الطول حسب الموضوع: إذا تنفهم بسرعة خليها قصيرة (18-28 كلمة وجملتين).
+  إذا تحتاج توضيح أكثر حتى تكون مفهومة، استخدم 3 جمل (لحد 42 كلمة). لا تطوّل بدون فائدة.
+
 قواعد الأسلوب:
-- البداية يجب أن تكون مختلفة تماماً عن هذه البدايات السابقة: {openings}
-- لا تبدأ بـ "هل تعلم". نوّع: سؤال مفاجئ، رقم مدهش، "تخيل أن..."، معلومة صادمة، "لماذا..."، "سر..."، تحدي، مقارنة.
-- عربية فصحى بسيطة وجمل قصيرة جداً. لا تطلب المتابعة ولا الاشتراك.
+- البداية مختلفة عن هذه البدايات السابقة: {openings}
+- لا تبدأ بـ "هل تعلم". نوّع: سؤال بسيط، "لماذا..."، "ماذا يحدث لو..."، رقم، مقارنة.
+- عربية فصحى سهلة جداً، كلمات يومية. لا تطلب المتابعة ولا الاشتراك.
+
+مثال جيد:
+intro_say: "لماذا نشعر بالنعاس بعد الأكل؟"
+facts: ["لأن الجسم يرسل دماً أكثر إلى المعدة لهضم الطعام", "فيقل نشاطك قليلاً، خصوصاً بعد وجبة كبيرة"]
 
 أرجع JSON فقط:
 - topic: الموضوع بكلمتين
-- headline_top: سطر علوي قصير (2-4 كلمات) يناسب البداية، مثل "سر لا يعرفه كثيرون" أو "لماذا يحدث"
+- headline_top: سطر علوي قصير (2-4 كلمات) مثل "لماذا يحدث" أو "معلومة سريعة"
 - headline_main: الكلمة الأساسية للموضوع (1-3 كلمات)
-- intro_say: جملة البداية المنطوقة (5-9 كلمات)
-- facts: قائمة من عنصرين، كل عنصر: screen (3-6 كلمات للشاشة) و say (6-11 كلمة منطوقة)
+- intro_say: جملة البداية المنطوقة (4-8 كلمات)
+- facts: قائمة من 2 أو 3 عناصر، كل عنصر: say (7-13 كلمة) — الأول هو الجواب، والباقي توضيح
+- clarity_score: من 1 إلى 10، كم يفهمها شخص عادي من أول مرة (كن صارماً)
 - pixabay_query: كلمتان بالإنجليزية تصف بالضبط المشهد اللي تتكلم عنه المعلومة (مو الموضوع العام).
   مثال: معلومة عن جبال تحت البحر = "underwater ocean" مو "mountains". شيء ملموس وبدون وجوه.
-- title: عنوان أقل من 60 حرف مع إيموجي واحد
+- title: عنوان واضح أقل من 60 حرف مع إيموجي واحد
 - description: جملة واحدة
 - hashtags: 4 هاشتاغات عربية"""
-    res = gv.gemini_json(prompt)
-    if not res or not res.get("facts") or not res.get("intro_say"):
+    res = None
+    for attempt in range(3):
+        cand = gv.gemini_json(prompt)
+        if not cand or not cand.get("facts") or not cand.get("intro_say"):
+            continue
+        facts = []
+        for f in cand["facts"][:3]:
+            say = f.get("say") if isinstance(f, dict) else str(f)
+            if say:
+                facts.append({"say": say, "screen": say})   # الشاشة = نفس الكلام حتى يفهمه حتى بدون صوت
+        cand["facts"] = facts
+        words = len(cand["intro_say"].split()) + sum(len(f["say"].split()) for f in facts)
+        score = float(cand.get("clarity_score", 0) or 0)
+        log(f"محاولة {attempt + 1}: كلمات={words} وضوح={score}")
+        if len(facts) >= 2 and words <= 44 and score >= 8:
+            res = cand
+            break
+        res = res or (cand if len(facts) >= 2 else None)
+    if not res:
         raise RuntimeError("Gemini ما رجّع سكربت")
-    res["facts"] = [f for f in res["facts"] if f.get("say") and f.get("screen")][:2]
+    res["facts"] = [f for f in res["facts"] if f.get("say") and f.get("screen")][:3]
     if not res["facts"]:
         raise RuntimeError("السكربت ناقص")
     res.setdefault("topic", cat)
@@ -251,12 +285,12 @@ def tts_lines(lines, voice, workdir):
     raw = []
     for i, text in enumerate(lines):
         mp3 = workdir / f"line{i}.mp3"
-        asyncio.run(edge_tts.Communicate(text, voice, rate="+8%").save(str(mp3)))
+        asyncio.run(edge_tts.Communicate(text, voice, rate="+0%").save(str(mp3)))
         raw.append(mp3)
     gaps = [0.25] * (len(lines) - 1) + [0.5]
     total = sum(duration(m) for m in raw) + sum(gaps)
     # إذا أطول من الحد نسرّعه شوية (لحد 20%)
-    tempo = min(1.2, max(1.0, total / (MAX_SECONDS - 0.2)))
+    tempo = min(1.08, max(1.0, total / (MAX_SECONDS - 0.2)))   # ما نسرّع هواية حتى يبقى مفهوم
     wavs, durs = [], []
     for i, mp3 in enumerate(raw):
         wav = workdir / f"line{i}.wav"
@@ -435,7 +469,8 @@ def main():
     logo = workdir / "logo.png"
     render_logo(logo)
 
-    media, author = get_media(script["pixabay_query"], history, workdir, n=3)
+    n_shots = 3 if sum(durs) <= 15 else 4      # الفيديو الأطول ياخذ لقطة زيادة حتى ما يمل
+    media, author = get_media(script["pixabay_query"], history, workdir, n=n_shots)
     music, music_credit = gv.get_music(history, workdir) if gv.MUSIC_ENABLED else (None, None)
     video = workdir / "video.mp4"
     build(media, voice, durs, overlays, logo, music, video)
