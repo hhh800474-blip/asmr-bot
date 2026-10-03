@@ -73,7 +73,19 @@ def font(size):
     return ImageFont.truetype(FONT_PATH, size)
 
 
+AR_DIGITS = str.maketrans("0123456789%", "٠١٢٣٤٥٦٧٨٩٪")
+
+
+def latin_font(size):
+    for f in ["/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+              "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf"]:
+        if Path(f).exists():
+            return ImageFont.truetype(f, size)
+    return ImageFont.load_default()
+
+
 def shape(text):
+    text = text.translate(AR_DIGITS).replace("#", "")
     """إذا ما كو raqm نستخدم arabic_reshaper + bidi حتى الحروف تتصل وتنقرا صح"""
     if USE_RAQM:
         return text
@@ -147,15 +159,24 @@ def render_fact(text, path, color=(255, 221, 0)):
 
 
 def render_logo(path):
-    """لوكو #لمحة ثابت بالزاوية العليا اليمين"""
+    """لوكو #لمحة ثابت بالزاوية العليا اليمين (العلامة # بخط لاتيني حتى ما تطلع مربع)"""
     img = Image.new("RGBA", (W, H), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
-    f = font(58)
-    tw, th, b = measure(d, LOGO_TEXT, f)
+    word = LOGO_TEXT.replace("#", "").strip()
+    f, fh = font(58), latin_font(52)
+    tw, th, b = measure(d, word, f)
+    hb = d.textbbox((0, 0), "#", font=fh)
+    hw = hb[2] - hb[0]
+    gap = 6
     x1, y0 = W - 50, 250
-    x0, y1 = x1 - tw - 56, y0 + th + 36
+    inner = tw + (hw + gap if "#" in LOGO_TEXT else 0)
+    x0, y1 = x1 - inner - 56, y0 + th + 36
     d.rounded_rectangle([x0, y0, x1, y1], radius=(y1 - y0) // 2, fill=(214, 31, 38, 225))
-    d.text((x0 + 28 - b[0], y0 + 18 - b[1]), shape(LOGO_TEXT), font=f, fill="white", **text_kw())
+    cy = (y0 + y1) / 2
+    # بالعربي العلامة تجي يمين الكلمة: #لمحة
+    if "#" in LOGO_TEXT:
+        d.text((x1 - 28 - hw - hb[0], cy - (hb[3] - hb[1]) / 2 - hb[1]), "#", font=fh, fill="white")
+    d.text((x0 + 28 - b[0], cy - th / 2 - b[1]), shape(word), font=f, fill="white", **text_kw())
     img.save(path)
 
 
@@ -186,7 +207,8 @@ def write_script(history):
 - headline_main: الكلمة الأساسية للموضوع (1-3 كلمات)
 - intro_say: جملة البداية المنطوقة (5-9 كلمات)
 - facts: قائمة من عنصرين، كل عنصر: screen (3-6 كلمات للشاشة) و say (6-11 كلمة منطوقة)
-- pixabay_query: كلمتان بالإنجليزية لصورة/فيديو يعبر عن الموضوع بصرياً (شيء ملموس، بدون وجوه)
+- pixabay_query: كلمتان بالإنجليزية تصف بالضبط المشهد اللي تتكلم عنه المعلومة (مو الموضوع العام).
+  مثال: معلومة عن جبال تحت البحر = "underwater ocean" مو "mountains". شيء ملموس وبدون وجوه.
 - title: عنوان أقل من 60 حرف مع إيموجي واحد
 - description: جملة واحدة
 - hashtags: 4 هاشتاغات عربية"""
