@@ -33,7 +33,7 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           PIXABAY_API_KEY: ${{ secrets.PIXABAY_API_KEY }}
           FREESOUND_API_KEY: ${{ secrets.FREESOUND_API_KEY }}
-          MAX_SECONDS: "15"
+          MAX_SECONDS: "20"
           LOGO_TEXT: "#لمحة"
         run: python generate_facts.py
 
