@@ -86,6 +86,9 @@ def latin_font(size):
 
 def shape(text):
     text = text.translate(AR_DIGITS).replace("#", "")
+    text = (text.replace("?", "؟").replace(",", "،").replace(";", "؛")
+                .replace('"', "").replace("'", "").replace("!", "").replace(":", " "))
+    text = text.rstrip(" .…").replace(".", "،")
     """إذا ما كو raqm نستخدم arabic_reshaper + bidi حتى الحروف تتصل وتنقرا صح"""
     if USE_RAQM:
         return text
@@ -205,8 +208,8 @@ def write_script(history):
 - فكرة واحدة فقط، مكتملة: سؤال/بداية ← الجواب المباشر ← سبب أو توضيح بسيط.
 - الجملة الثانية لازم تجاوب على البداية بشكل صريح وواضح. لا ألغاز ولا معلومة ناقصة.
 - كل جملة لازم تكون مفهومة لو انقرت لوحدها.
-- الطول حسب الموضوع: إذا تنفهم بسرعة خليها قصيرة (18-28 كلمة وجملتين).
-  إذا تحتاج توضيح أكثر حتى تكون مفهومة، استخدم 3 جمل (لحد 42 كلمة). لا تطوّل بدون فائدة.
+- الأفضل قصير ومباشر: 18-28 كلمة بجملتين. الإيقاع سريع وحيوي.
+  فقط إذا الموضوع ما ينفهم بدون توضيح إضافي، استخدم 3 جمل (لحد 36 كلمة).
 
 قواعد الأسلوب:
 - البداية مختلفة عن هذه البدايات السابقة: {openings}
@@ -243,7 +246,7 @@ facts: ["لأن الجسم يرسل دماً أكثر إلى المعدة لهض
         words = len(cand["intro_say"].split()) + sum(len(f["say"].split()) for f in facts)
         score = float(cand.get("clarity_score", 0) or 0)
         log(f"محاولة {attempt + 1}: كلمات={words} وضوح={score}")
-        if len(facts) >= 2 and words <= 44 and score >= 8:
+        if len(facts) >= 2 and words <= 38 and score >= 8:
             res = cand
             break
         res = res or (cand if len(facts) >= 2 else None)
@@ -285,12 +288,12 @@ def tts_lines(lines, voice, workdir):
     raw = []
     for i, text in enumerate(lines):
         mp3 = workdir / f"line{i}.mp3"
-        asyncio.run(edge_tts.Communicate(text, voice, rate="+0%").save(str(mp3)))
+        asyncio.run(edge_tts.Communicate(text, voice, rate="+12%").save(str(mp3)))
         raw.append(mp3)
-    gaps = [0.25] * (len(lines) - 1) + [0.5]
+    gaps = [0.12] * (len(lines) - 1) + [0.3]
     total = sum(duration(m) for m in raw) + sum(gaps)
     # إذا أطول من الحد نسرّعه شوية (لحد 20%)
-    tempo = min(1.08, max(1.0, total / (MAX_SECONDS - 0.2)))   # ما نسرّع هواية حتى يبقى مفهوم
+    tempo = min(1.15, max(1.0, total / (MAX_SECONDS - 0.2)))
     wavs, durs = [], []
     for i, mp3 in enumerate(raw):
         wav = workdir / f"line{i}.wav"
