@@ -227,8 +227,9 @@ facts: ["لأن الجسم يرسل دماً أكثر إلى المعدة لهض
 - intro_say: جملة البداية المنطوقة (4-8 كلمات)
 - facts: قائمة من 2 أو 3 عناصر، كل عنصر: say (7-13 كلمة) — الأول هو الجواب، والباقي توضيح
 - clarity_score: من 1 إلى 10، كم يفهمها شخص عادي من أول مرة (كن صارماً)
-- pixabay_query: كلمتان بالإنجليزية تصف بالضبط المشهد اللي تتكلم عنه المعلومة (مو الموضوع العام).
-  مثال: معلومة عن جبال تحت البحر = "underwater ocean" مو "mountains". شيء ملموس وبدون وجوه.
+- pixabay_queries: قائمة من 3 عبارات بحث إنجليزية (2-3 كلمات) لتصوير فيديو حقيقي يوضح المعلومة بالضبط.
+  الأولى أقوى لقطة افتتاحية تشد النظر وتطابق السؤال حرفياً (مثال: معلومة عن الرمش = "eye blinking", "eye close up", "eyes").
+  أشياء حقيقية تُصوَّر بالكاميرا فقط، لا رسوم ولا خيال علمي.
 - title: عنوان واضح أقل من 60 حرف مع إيموجي واحد
 - description: جملة واحدة
 - hashtags: 4 هاشتاغات عربية"""
@@ -258,7 +259,8 @@ facts: ["لأن الجسم يرسل دماً أكثر إلى المعدة لهض
     res.setdefault("topic", cat)
     res.setdefault("headline_top", "معلومة سريعة")
     res.setdefault("headline_main", res["topic"])
-    res.setdefault("pixabay_query", "nature")
+    qs = res.get("pixabay_queries") or [res.get("pixabay_query") or "nature"]
+    res["pixabay_queries"] = [q for q in qs if isinstance(q, str) and q.strip()][:3] or ["nature"]
     res.setdefault("title", f"{res['topic']} ✨")
     res.setdefault("description", res["intro_say"])
     tags = [t if t.startswith("#") else "#" + t.replace(" ", "_") for t in res.get("hashtags", [])][:4]
@@ -312,51 +314,79 @@ def tts_lines(lines, voice, workdir):
 
 
 # ------------------------- اللقطات (فيديو + صور) -------------------------
-BAD = ("woman", "man", "girl", "boy", "people", "person", "face", "portrait", "selfie")
+# أي شي مو تصوير حقيقي نرفضه: رسوم، 3D، خيال علمي، فن رقمي...
+ART = {"3d", "render", "rendering", "illustration", "cartoon", "anime", "drawing", "fantasy",
+       "digital", "surreal", "sci-fi", "scifi", "ufo", "alien", "aliens", "artificial",
+       "ai", "generated", "manipulation", "painting", "art", "artwork", "graphic", "vector",
+       "animation", "animated", "cgi", "futuristic", "mystical", "magic", "dream", "abstract",
+       "background", "wallpaper", "pattern", "texture", "model", "avatar", "character"}
+STOP = {"the", "and", "with", "close", "closeup", "up", "of", "in", "on", "a", "an", "slow", "motion"}
 
 
-def relevant(tags, words):
-    tags = tags.lower()
-    return any(w in tags for w in words) and not any(b in tags for b in BAD)
+def tag_words(tags):
+    return {w for t in tags.lower().split(",") for w in t.strip().split()}
 
 
-def pixabay_videos(query, words, used):
+def score(h, words):
+    """كم كلمة من البحث موجودة بالوسوم. الصفر يعني مو مناسب، و-1 يعني رسوم/مو حقيقي"""
+    tw = tag_words(h.get("tags", ""))
+    if tw & ART:
+        return -1
+    return len(set(words) & tw)
+
+
+def pixabay_videos(query, used):
     r = requests.get("https://pixabay.com/api/videos/", timeout=30, params={
-        "key": PIXABAY_API_KEY, "q": query, "per_page": 50, "safesearch": "true"})
+        "key": PIXABAY_API_KEY, "q": query, "per_page": 60, "safesearch": "true",
+        "video_type": "film"})            # film = تصوير حقيقي فقط (مو أنيميشن)
     r.raise_for_status()
     return [h for h in r.json().get("hits", [])
-            if f"pb{h['id']}" not in used and relevant(h.get("tags", ""), words)
-            and h.get("duration", 0) >= 4]
+            if f"pb{h['id']}" not in used and h.get("duration", 0) >= 4]
 
 
-def pixabay_images(query, words, used):
+def pixabay_images(query, used):
     r = requests.get("https://pixabay.com/api/", timeout=30, params={
-        "key": PIXABAY_API_KEY, "q": query, "image_type": "photo", "per_page": 60,
-        "safesearch": "true", "order": "popular"})
+        "key": PIXABAY_API_KEY, "q": query, "image_type": "photo", "per_page": 80,
+        "safesearch": "true"})
     r.raise_for_status()
-    return [h for h in r.json().get("hits", [])
-            if f"img{h['id']}" not in used and relevant(h.get("tags", ""), words)]
+    return [h for h in r.json().get("hits", []) if f"img{h['id']}" not in used]
 
 
-def get_media(query, history, workdir, n=3):
+def best(hits, words, k):
+    """نرتب حسب التطابق ونختار من الأفضل (مع شوية تنويع)"""
+    scored = [(score(h, words), random.random(), h) for h in hits]
+    scored = [x for x in scored if x[0] > 0]
+    scored.sort(key=lambda x: (-x[0], x[1]))
+    top = scored[0][0] if scored else 0
+    good = [x[2] for x in scored if x[0] >= top][:max(k * 3, 6)]
+    random.shuffle(good)
+    if len(good) < k:                       # إذا قليلة نكمل بالأقل تطابق (بس مو صفر)
+        good += [x[2] for x in scored if 0 < x[0] < top][:k * 2]
+    return good
+
+
+def get_media(queries, history, workdir, n=3):
     if not PIXABAY_API_KEY:
         raise RuntimeError("PIXABAY_API_KEY مفقود")
+    if isinstance(queries, str):
+        queries = [queries]
     used = set(map(str, history.setdefault("pexels_ids", [])))
-    words = [w.lower() for w in query.split() if len(w) > 2] or [query.lower()]
-    queries = [query] + [w for w in words if w != query.lower()]
-    vids, imgs = [], []
+    vids, imgs, seen = [], [], set()
     for q in queries:
-        if not vids:
-            vids = pixabay_videos(q, words, used)
-        if not imgs:
-            imgs = pixabay_images(q, words, used)
-        if vids and imgs:
+        words = [w.lower() for w in q.split() if len(w) > 2 and w.lower() not in STOP] or [q.lower()]
+        for h in best(pixabay_videos(q, used), words, n):
+            if ("v", h["id"]) not in seen:
+                seen.add(("v", h["id"])); vids.append(h)
+        for h in best(pixabay_images(q, used), words, n):
+            if ("i", h["id"]) not in seen:
+                seen.add(("i", h["id"])); imgs.append(h)
+        if len(vids) >= 2 and len(imgs) >= 2:
             break
-    random.shuffle(vids)
-    random.shuffle(imgs)
-    # نخلط: فيديو، صورة، فيديو (أو الموجود)
+    log(f"لقيت: {len(vids)} فيديو حقيقي، {len(imgs)} صورة")
+    # البداية لازم تكون فيديو حقيقي متحرك حتى تشد النظر، وبعدها نخلط
     plan = []
-    for kind in ("video", "image", "video", "image"):
+    order = ("video", "image", "video", "video") if len(vids) >= 3 else ("video", "image", "video", "image")
+    for kind in order:
         src = vids if kind == "video" else imgs
         if src:
             plan.append((kind, src.pop(0)))
@@ -365,7 +395,7 @@ def get_media(query, history, workdir, n=3):
     while len(plan) < n and (vids or imgs):
         plan.append(("video", vids.pop(0)) if vids else ("image", imgs.pop(0)))
     if not plan:
-        raise RuntimeError(f"ما لگينا لقطات لـ {query}")
+        raise RuntimeError(f"ما لگينا لقطات حقيقية لـ {queries}")
 
     media, authors = [], []
     for i, (kind, h) in enumerate(plan):
@@ -383,7 +413,7 @@ def get_media(query, history, workdir, n=3):
             history["pexels_ids"].append(f"img{h['id']}")
         media.append((kind, p))
         authors.append(h["user"])
-    log("اللقطات: " + ", ".join(k for k, _ in media))
+        log(f"لقطة {i + 1} ({kind}): {h.get('tags')}")
     while len(media) < n:
         media.append(media[len(media) % len(media)])
     return media, ", ".join(dict.fromkeys(authors))
@@ -473,7 +503,7 @@ def main():
     render_logo(logo)
 
     n_shots = 3 if sum(durs) <= 15 else 4      # الفيديو الأطول ياخذ لقطة زيادة حتى ما يمل
-    media, author = get_media(script["pixabay_query"], history, workdir, n=n_shots)
+    media, author = get_media(script["pixabay_queries"], history, workdir, n=n_shots)
     music, music_credit = gv.get_music(history, workdir) if gv.MUSIC_ENABLED else (None, None)
     video = workdir / "video.mp4"
     build(media, voice, durs, overlays, logo, music, video)
