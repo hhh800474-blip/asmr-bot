@@ -230,7 +230,7 @@ facts: ["لأن الجسم يرسل دماً أكثر إلى المعدة لهض
 - pixabay_queries: قائمة من 3 عبارات بحث إنجليزية (2-3 كلمات) لتصوير فيديو حقيقي يوضح المعلومة بالضبط.
   الأولى أقوى لقطة افتتاحية تشد النظر وتطابق السؤال حرفياً (مثال: معلومة عن الرمش = "eye blinking", "eye close up", "eyes").
   أشياء حقيقية تُصوَّر بالكاميرا فقط، لا رسوم ولا خيال علمي.
-- title: عنوان واضح أقل من 60 حرف مع إيموجي واحد
+- title: عنوان على شكل سؤال يثير الفضول، أقل من 60 حرف، مع إيموجي واحد
 - description: جملة واحدة
 - hashtags: 4 هاشتاغات عربية"""
     res = None
@@ -420,6 +420,25 @@ def get_media(queries, history, workdir, n=3):
 
 
 # ------------------------- التركيب -------------------------
+def visible_start(path):
+    """كثير من لقطات Pixabay تبدي بشاشة سودة أو تظهر تدريجياً (fade in).
+    نقيس إضاءة أول 4 ثواني ونبدي من أول لحظة توصل لإضاءتها الطبيعية"""
+    try:
+        out = subprocess.run(["ffmpeg", "-hide_banner", "-t", "4", "-i", str(path), "-an", "-vf",
+                              "fps=10,signalstats,metadata=print:key=lavfi.signalstats.YAVG",
+                              "-f", "null", "-"], capture_output=True, text=True).stderr
+        vals = [float(l.split("=")[-1]) for l in out.splitlines() if "YAVG=" in l]
+        if not vals:
+            return 0.3
+        normal = sorted(vals)[len(vals) // 2]          # الإضاءة الطبيعية للقطة
+        for k, v in enumerate(vals):
+            if v >= max(18, 0.8 * normal):
+                return round(max(0.3, k / 10 + 0.1), 2)
+        return 0.3
+    except Exception:
+        return 0.5
+
+
 def build(media, voice, durs, overlays, logo, music, out):
     D = sum(durs)
     n = len(media)
@@ -442,10 +461,14 @@ def build(media, voice, durs, overlays, logo, music, out):
     parts = []
     for i, (kind, p) in enumerate(media):
         if kind == "video":
+            # أول لقطة: زوم سريع لداخل بأول ثانية حتى تشد العين
+            punch = (f",zoompan=z='if(lt(on,30),1.18-0.18*on/30,1)':x='iw/2-(iw/zoom/2)'"
+                     f":y='ih/2-(ih/zoom/2)':d=1:s={W}x{H}:fps=30") if i == 0 else ""
+            st = visible_start(p)
             parts.append(
-                f"[{i}:v]trim=duration={L:.3f},setpts=PTS-STARTPTS,"
-                f"scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},fps=30,"
-                f"{look},setsar=1[i{i}]")
+                f"[{i}:v]trim=start={st:.2f}:duration={L:.3f},setpts=PTS-STARTPTS,"
+                f"scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H},fps=30"
+                f"{punch},{look},setsar=1[i{i}]")
         else:
             z = random.choice([f"1+0.14*on/{frames}", f"1.14-0.14*on/{frames}"])
             parts.append(
@@ -465,9 +488,9 @@ def build(media, voice, durs, overlays, logo, music, out):
     parts.append(f"[{vi}:a]{fmt},volume=1.25[vo]")
     if music:
         parts.append(f"[{vi + 1}:a]{fmt},volume={FACTS_MUSIC_VOLUME},afade=t=out:st={max(0, D - 1):.2f}:d=1[mu]")
-        parts.append("[vo][mu]amix=inputs=2:duration=first:normalize=0,alimiter=limit=0.9[a]")
+        parts.append("[vo][mu]amix=inputs=2:duration=first:normalize=0,loudnorm=I=-14:TP=-1.5:LRA=11[a]")
     else:
-        parts.append("[vo]anull[a]")
+        parts.append("[vo]loudnorm=I=-14:TP=-1.5:LRA=11[a]")
 
     cmd += ["-filter_complex", ";".join(parts), "-map", "[v]", "-map", "[a]", "-t", f"{D:.2f}",
             "-c:v", "libx264", "-preset", "veryfast", "-crf", "21",
@@ -514,7 +537,8 @@ def main():
     credits += "\nالصوت مولّد بالذكاء الاصطناعي. معلومات عامة وليست نصيحة طبية."
     meta = {
         "title": script["title"][:100],
-        "description": script["description"] + "\n\n" + " ".join(script["hashtags"]) + credits,
+        "description": (script["description"] + "\n\n👇 ما المعلومة التي تريد أن نشرحها في الفيديو القادم؟\n\n"
+                        + " ".join(script["hashtags"]) + credits),
         "hashtags": script["hashtags"],
         "video_file": str(video),
         "ai_voice": True,
