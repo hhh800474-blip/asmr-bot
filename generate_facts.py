@@ -187,6 +187,13 @@ def render_logo(path):
     img.save(path)
 
 
+TASHKEEL = "".join(chr(c) for c in range(0x064B, 0x0653)) + "\u0670"
+
+
+def strip_tashkeel(t):
+    return "".join(ch for ch in t if ch not in TASHKEEL)
+
+
 # ------------------------- السكربت -------------------------
 def write_script(history):
     cats = history.setdefault("fact_categories", [])
@@ -224,8 +231,14 @@ facts: ["لأن الجسم يرسل دماً أكثر إلى المعدة لهض
 - topic: الموضوع بكلمتين
 - headline_top: سطر علوي قصير (2-4 كلمات) مثل "لماذا يحدث" أو "معلومة سريعة"
 - headline_main: الكلمة الأساسية للموضوع (1-3 كلمات)
-- intro_say: جملة البداية المنطوقة (4-8 كلمات)
-- facts: قائمة من 2 أو 3 عناصر، كل عنصر: say (7-13 كلمة) — الأول هو الجواب، والباقي توضيح
+- intro_say: جملة البداية المنطوقة (4-8 كلمات) بدون تشكيل
+- intro_voiced: نفس جملة البداية بالضبط لكن مشكّلة تشكيلاً كاملاً (للقارئ الآلي)
+- facts: قائمة من 2 أو 3 عناصر، الأول هو الجواب والباقي توضيح، كل عنصر فيه:
+    say: الجملة (7-13 كلمة) بدون تشكيل، للشاشة
+    voiced: نفس الجملة بالضبط مشكّلة تشكيلاً كاملاً، حتى ينطقها القارئ الآلي صح
+  مهم: الكلمات التي لها أكثر من نطق يجب تشكيلها بدقة حسب المعنى،
+  مثل: مُرَكَّبات (مواد كيميائية) وليس مَرْكَبات (سيارات)، عِلْم/عَلَم، يُحَسِّن/يَحْسُن.
+  وإذا وجدت كلمة أبسط بدون لبس فاستخدمها.
 - clarity_score: من 1 إلى 10، كم يفهمها شخص عادي من أول مرة (كن صارماً)
 - pixabay_queries: قائمة من 3 عبارات بحث إنجليزية (2-3 كلمات) لتصوير فيديو حقيقي يوضح المعلومة بالضبط.
   الأولى أقوى لقطة افتتاحية تشد النظر وتطابق السؤال حرفياً (مثال: معلومة عن الرمش = "eye blinking", "eye close up", "eyes").
@@ -241,8 +254,11 @@ facts: ["لأن الجسم يرسل دماً أكثر إلى المعدة لهض
         facts = []
         for f in cand["facts"][:3]:
             say = f.get("say") if isinstance(f, dict) else str(f)
+            voiced = (f.get("voiced") if isinstance(f, dict) else None) or say
             if say:
-                facts.append({"say": say, "screen": say})   # الشاشة = نفس الكلام حتى يفهمه حتى بدون صوت
+                say = strip_tashkeel(say)
+                # الشاشة = نفس الكلام (بدون تشكيل)، والصوت يقرا النسخة المشكّلة حتى ينطق صح
+                facts.append({"say": say, "screen": say, "voiced": voiced})
         cand["facts"] = facts
         words = len(cand["intro_say"].split()) + sum(len(f["say"].split()) for f in facts)
         score = float(cand.get("clarity_score", 0) or 0)
@@ -256,6 +272,7 @@ facts: ["لأن الجسم يرسل دماً أكثر إلى المعدة لهض
     res["facts"] = [f for f in res["facts"] if f.get("say") and f.get("screen")][:3]
     if not res["facts"]:
         raise RuntimeError("السكربت ناقص")
+    res["intro_say"] = strip_tashkeel(res["intro_say"])
     res.setdefault("topic", cat)
     res.setdefault("headline_top", "معلومة سريعة")
     res.setdefault("headline_main", res["topic"])
@@ -508,7 +525,8 @@ def main():
 
     script = write_script(history)
     voice_name = pick_voice(history)
-    lines = [script["intro_say"]] + [f["say"] for f in script["facts"]]
+    lines = ([script.get("intro_voiced") or script["intro_say"]]
+             + [f.get("voiced") or f["say"] for f in script["facts"]])
     voice, durs = tts_lines(lines, voice_name, workdir)
 
     # كل نص يطلع بنفس وقت جملته بالصوت
