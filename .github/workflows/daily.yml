@@ -14,7 +14,7 @@ jobs:
     timeout-minutes: 25
     environment:
       name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
+      url: ${{ steps.deployment.outputs.page_url || steps.deployment2.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
 
@@ -58,13 +58,23 @@ jobs:
 
       - name: Host video on GitHub Pages
         id: deployment
+        continue-on-error: true
+        uses: actions/deploy-pages@v4
+
+      - name: Wait before retry
+        if: steps.deployment.outcome == 'failure'
+        run: sleep 30
+
+      - name: Host video on GitHub Pages (retry)
+        id: deployment2
+        if: steps.deployment.outcome == 'failure'
         uses: actions/deploy-pages@v4
 
       - name: Publish
         env:
           BUFFER_API_KEY: ${{ secrets.BUFFER_API_KEY }}
           PUBLISH_PLATFORMS: "youtube,tiktok,facebook"
-          VIDEO_URL: ${{ steps.deployment.outputs.page_url }}v${{ github.run_id }}.mp4
+          VIDEO_URL: ${{ steps.deployment.outputs.page_url || steps.deployment2.outputs.page_url }}v${{ github.run_id }}.mp4
         run: python publish.py
 
       - name: Save history
