@@ -39,11 +39,15 @@ VOICES = [v.strip() for v in os.getenv(
     "FACTS_VOICES", "ar-SA-HamedNeural,ar-SA-ZariyahNeural,ar-AE-HamdanNeural,ar-AE-FatimaNeural"
 ).split(",") if v.strip()]
 
-CATEGORIES = [
+# المجالات اللي جابت أعلى مشاهدات بيوتيوب وفيسبوك وتيك توك: تجارب يعيشها الإنسان بجسمه ويومه
+WINNING = ["النوم", "جسم الإنسان", "الدماغ والذاكرة", "الأكل والجوع وعادات الطعام", "عادات يومية نفعلها دون أن ننتبه"]
+
+CATEGORIES = WINNING + [
     "صحة وعادات يومية", "رياضة ولياقة", "جسم الإنسان", "علم النفس والسلوك", "النوم",
     "تغذية وفوائد الأكل", "الفضاء والكون", "عالم الحيوان", "الطبيعة والأرض",
     "علوم مدهشة", "الدماغ والذاكرة", "الماء والترطيب",
 ]
+CATEGORIES = list(dict.fromkeys(CATEGORIES))   # بدون تكرار
 
 
 # ------------------------- الخط العربي -------------------------
@@ -197,8 +201,10 @@ def strip_tashkeel(t):
 # ------------------------- السكربت -------------------------
 def write_script(history):
     cats = history.setdefault("fact_categories", [])
-    cat = next((c for c in random.sample(CATEGORIES, len(CATEGORIES)) if c not in cats[-6:]),
-               random.choice(CATEGORIES))
+    # 70% من المجالات الناجحة (حسب أرقام القنوات)، و30% تجارب من الباقي
+    pool = WINNING if random.random() < 0.7 else [c for c in CATEGORIES if c not in WINNING]
+    fresh = [c for c in pool if c not in cats[-2:]] or pool
+    cat = random.choice(fresh)
     topics = history.setdefault("fact_topics", [])[-60:]
     openings = history.setdefault("fact_openings", [])[-12:]
     prompt = f"""أنت كاتب لقناة "لمحة" التي تنشر معلومة سريعة بالعربي في فيديو قصير (من 10 إلى 20 ثانية حسب الحاجة).
@@ -220,7 +226,12 @@ def write_script(history):
 
 قواعد الأسلوب:
 - البداية مختلفة عن هذه البدايات السابقة: {openings}
-- لا تبدأ بـ "هل تعلم". نوّع: سؤال بسيط، "لماذا..."، "ماذا يحدث لو..."، رقم، مقارنة.
+- لا تبدأ بـ "هل تعلم".
+- أول جملة هي أهم شي بالفيديو: 75% من الناس يقررون يكملون أو يمررون بأول ثانيتين.
+  اجعلها تخاطب المشاهد مباشرة بتجربة عاشها بنفسه أو شي يخصه، مثل:
+  "هل شعرت يوماً أنك تسقط وأنت نائم؟"، "لماذا تتثاءب عندما ترى غيرك يتثاءب؟"،
+  "توقف عن شرب الماء بهذه الطريقة"، "جسمك يفعل هذا كل ليلة دون أن تشعر".
+  ممنوع البدايات العامة الباردة مثل "معلومة عن..." أو "اكتشف العلماء...".
 - عربية فصحى سهلة جداً، كلمات يومية. لا تطلب المتابعة ولا الاشتراك.
 
 مثال جيد:
@@ -229,7 +240,7 @@ facts: ["لأن الجسم يرسل دماً أكثر إلى المعدة لهض
 
 أرجع JSON فقط:
 - topic: الموضوع بكلمتين
-- headline_top: سطر علوي قصير (2-4 كلمات) مثل "لماذا يحدث" أو "معلومة سريعة"
+- headline_top: سطر علوي قصير (2-4 كلمات) يشد ويخاطب المشاهد، مثل "حصلت لك؟" أو "جسمك يفعلها" أو "لا تتجاهلها"
 - headline_main: الكلمة الأساسية للموضوع (1-3 كلمات)
 - intro_say: جملة البداية المنطوقة (4-8 كلمات) بدون تشكيل
 - intro_voiced: نفس جملة البداية بالضبط لكن مشكّلة تشكيلاً كاملاً (للقارئ الآلي)
@@ -317,6 +328,8 @@ def tts_lines(lines, voice, workdir):
     for i, mp3 in enumerate(raw):
         wav = workdir / f"line{i}.wav"
         subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", str(mp3), "-af",
+                        f"silenceremove=start_periods=1:start_threshold=-45dB:start_silence=0.02,"
+                        f"areverse,silenceremove=start_periods=1:start_threshold=-45dB:start_silence=0.05,areverse,"
                         f"atempo={tempo:.3f},apad=pad_dur={gaps[i]}", "-ar", "44100", "-ac", "2",
                         str(wav)], check=True)
         wavs.append(wav)
