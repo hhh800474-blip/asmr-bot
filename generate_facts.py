@@ -350,6 +350,11 @@ ART = {"3d", "render", "rendering", "illustration", "cartoon", "anime", "drawing
        "ai", "generated", "manipulation", "painting", "art", "artwork", "graphic", "vector",
        "animation", "animated", "cgi", "futuristic", "mystical", "magic", "dream", "abstract",
        "background", "wallpaper", "pattern", "texture", "model", "avatar", "character"}
+# محتوى غير لائق: نرفضه دائماً حتى لو الموضوع عن الجلد أو الجسم
+NSFW = {"erotic", "eroticism", "erotica", "sexy", "sex", "sensual", "seductive", "seduction",
+        "nude", "naked", "nudity", "topless", "bikini", "lingerie", "underwear", "bra",
+        "swimsuit", "swimwear", "lust", "intimate", "intimacy", "boudoir", "hot", "kiss",
+        "kissing", "bed", "bedroom", "couple", "lovers", "romance", "romantic", "act", "partial"}
 STOP = {"the", "and", "with", "close", "closeup", "up", "of", "in", "on", "a", "an", "slow", "motion"}
 
 
@@ -360,7 +365,7 @@ def tag_words(tags):
 def score(h, words):
     """كم كلمة من البحث موجودة بالوسوم. الصفر يعني مو مناسب، و-1 يعني رسوم/مو حقيقي"""
     tw = tag_words(h.get("tags", ""))
-    if tw & ART:
+    if tw & ART or tw & NSFW:
         return -1
     return len(set(words) & tw)
 
@@ -395,6 +400,27 @@ def best(hits, words, k):
     return good
 
 
+def download_retry(url, path, tries=4):
+    """Pixabay أحياناً يرجع 429 (طلبات كثيرة). ننتظر ونعيد بدل ما يفشل الفيديو كله"""
+    import time
+    for k in range(tries):
+        try:
+            return gv.download(url, path)
+        except requests.HTTPError as e:
+            code = e.response.status_code if e.response is not None else 0
+            if code in (429, 500, 502, 503) and k < tries - 1:
+                wait = 5 * (2 ** k)
+                log(f"Pixabay رد {code}، ننتظر {wait} ثانية ونعيد")
+                time.sleep(wait)
+                continue
+            raise
+        except requests.RequestException:
+            if k < tries - 1:
+                time.sleep(5)
+                continue
+            raise
+
+
 def get_media(queries, history, workdir, n=3):
     if not PIXABAY_API_KEY:
         raise RuntimeError("PIXABAY_API_KEY مفقود")
@@ -414,36 +440,46 @@ def get_media(queries, history, workdir, n=3):
             break
     log(f"لقيت: {len(vids)} فيديو حقيقي، {len(imgs)} صورة")
     # البداية لازم تكون فيديو حقيقي متحرك حتى تشد النظر، وبعدها نخلط
-    plan = []
     order = ("video", "image", "video", "video") if len(vids) >= 3 else ("video", "image", "video", "image")
-    for kind in order:
-        src = vids if kind == "video" else imgs
-        if src:
-            plan.append((kind, src.pop(0)))
-        if len(plan) == n:
-            break
-    while len(plan) < n and (vids or imgs):
-        plan.append(("video", vids.pop(0)) if vids else ("image", imgs.pop(0)))
-    if not plan:
-        raise RuntimeError(f"ما لگينا لقطات حقيقية لـ {queries}")
+    order = list(order[:n]) + ["video", "image"] * n      # احتياط إذا فشل تحميل لقطة
 
     media, authors = [], []
-    for i, (kind, h) in enumerate(plan):
-        if kind == "video":
-            files = [f for f in h["videos"].values() if f.get("url")]
-            vert = [f for f in files if f["height"] > f["width"]]
-            f = max(vert or files, key=lambda f: f["width"] * f["height"]
-                    if f["width"] * f["height"] <= 1920 * 1920 else 0)
-            p = workdir / f"m{i}.mp4"
-            gv.download(f["url"], p)
-            history["pexels_ids"].append(f"pb{h['id']}")
-        else:
-            p = workdir / f"m{i}.jpg"
-            gv.download(h["largeImageURL"], p)
-            history["pexels_ids"].append(f"img{h['id']}")
+    for kind in order:
+        if len(media) == n:
+            break
+        src = vids if kind == "video" else imgs
+        if not src:
+            src = imgs if kind == "video" else vids
+            kind = "image" if kind == "video" else "video"
+        if not src:
+            break
+        h = src.pop(0)
+        i = len(media)
+        try:
+            if kind == "video":
+                files = [f for f in h["videos"].values() if f.get("url")]
+                vert = [f for f in files if f["height"] > f["width"]]
+                f = max(vert or files, key=lambda f: f["width"] * f["height"]
+                        if f["width"] * f["height"] <= 1920 * 1920 else 0)
+                p = workdir / f"m{i}.mp4"
+                download_retry(f["url"], p)
+                history["pexels_ids"].append(f"pb{h['id']}")
+            else:
+                p = workdir / f"m{i}.jpg"
+                url = h.get("largeImageURL") or h.get("webformatURL")
+                try:
+                    download_retry(url, p)
+                except Exception:
+                    download_retry(h["webformatURL"], p)      # نسخة أصغر إذا الكبيرة رفضت
+                history["pexels_ids"].append(f"img{h['id']}")
+        except Exception as e:
+            log(f"تخطينا لقطة ما تحملت ({str(e)[:80]})")
+            continue
         media.append((kind, p))
         authors.append(h["user"])
         log(f"لقطة {i + 1} ({kind}): {h.get('tags')}")
+    if not media:
+        raise RuntimeError(f"ما گدرنا نحمّل أي لقطة لـ {queries}")
     while len(media) < n:
         media.append(media[len(media) % len(media)])
     return media, ", ".join(dict.fromkeys(authors))
