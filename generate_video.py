@@ -129,13 +129,36 @@ def save_history(h):
     HISTORY_FILE.write_text(json.dumps(h, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def download(url, path, headers=None):
-    with requests.get(url, headers=headers, stream=True, timeout=120) as r:
-        r.raise_for_status()
-        with open(path, "wb") as f:
-            for chunk in r.iter_content(1 << 16):
-                f.write(chunk)
-    return path
+def download(url, path, headers=None, tries=4):
+    """تحميل مع إعادة محاولة: الاتصال أحياناً ينقطع بالنص (IncompleteRead) أو الموقع يرد 429"""
+    import time
+    last = None
+    for k in range(tries):
+        try:
+            with requests.get(url, headers=headers, stream=True, timeout=120) as r:
+                if r.status_code in (429, 500, 502, 503, 504):
+                    raise requests.HTTPError(f"{r.status_code}", response=r)
+                r.raise_for_status()
+                with open(path, "wb") as f:
+                    for chunk in r.iter_content(1 << 16):
+                        f.write(chunk)
+            return path
+        except requests.HTTPError as e:
+            code = e.response.status_code if e.response is not None else 0
+            if code and code not in (429, 500, 502, 503, 504):
+                raise                                   # خطأ دائم (مثل 404) ما يفيد نعيده
+            last = e
+        except requests.RequestException as e:          # انقطاع بالنص، مهلة، إلخ
+            last = e
+        try:
+            Path(path).unlink()
+        except Exception:
+            pass
+        if k < tries - 1:
+            wait = 5 * (2 ** k)
+            log(f"التحميل تعثر ({str(last)[:60]})، ننتظر {wait} ثانية ونعيد")
+            time.sleep(wait)
+    raise last
 
 
 # ------------------------- 1) الفكرة -------------------------
@@ -528,7 +551,11 @@ def get_music(history, workdir):
         if res:
             m = random.choice(res[:10])
             p = workdir / "music.mp3"
-            download(m["previews"]["preview-hq-mp3"], p)
+            try:
+                download(m["previews"]["preview-hq-mp3"], p)
+            except Exception as e:
+                log(f"الموسيقى ما تحملت ({str(e)[:60]})، نجرب غيرها")
+                continue
             history["freesound_ids"].append(m["id"])
             log(f"موسيقى: {m['name']}")
             return p, {"freesound_id": m["id"], "name": m["name"], "author": m["username"]}

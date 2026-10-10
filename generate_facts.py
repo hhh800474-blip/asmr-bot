@@ -594,7 +594,11 @@ def main():
 
     n_shots = 3 if sum(durs) <= 15 else 4      # الفيديو الأطول ياخذ لقطة زيادة حتى ما يمل
     media, author = get_media(script["pixabay_queries"], history, workdir, n=n_shots)
-    music, music_credit = gv.get_music(history, workdir) if gv.MUSIC_ENABLED else (None, None)
+    try:
+        music, music_credit = gv.get_music(history, workdir) if gv.MUSIC_ENABLED else (None, None)
+    except Exception as e:
+        log(f"نكمل بدون موسيقى ({str(e)[:60]})")      # الموسيقى إضافة، ما نوگف الفيديو بسببها
+        music, music_credit = None, None
     video = workdir / "video.mp4"
     build(media, voice, durs, overlays, logo, music, video)
 
