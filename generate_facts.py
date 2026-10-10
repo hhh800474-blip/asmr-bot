@@ -198,6 +198,40 @@ def strip_tashkeel(t):
     return "".join(ch for ch in t if ch not in TASHKEEL)
 
 
+SHADDA = "\u0651"
+
+
+def soften_endings(t):
+    """نشيل حركة آخر الكلمة والتنوين (نقرا بالوقف) حتى ما يطلع النطق متكلف مثل: ذِكْرَىً قَدِيمَةً"""
+    out = []
+    for w in t.split():
+        core = w.rstrip("؟?!.،,:؛")
+        tail = w[len(core):]
+        chars = list(core)
+        while chars and chars[-1] in TASHKEEL and chars[-1] != SHADDA:
+            chars.pop()
+        out.append("".join(chars) + tail)
+    return " ".join(out)
+
+
+def review_pronunciation(lines):
+    """مراجعة ثانية: Gemini يتأكد إن تشكيل كل كلمة يطابق معناها بالجملة"""
+    prompt = f"""هذه جمل سيقرأها قارئ صوت آلي بالعربية:
+{json.dumps(lines, ensure_ascii=False)}
+راجع كل كلمة يمكن أن تُقرأ بأكثر من طريقة، وتأكد أن تشكيلها يطابق المعنى في الجملة.
+إذا وجدت كلمة نادرة أو صعبة النطق، استبدلها بكلمة شائعة بنفس المعنى.
+لا تغيّر معنى الجمل ولا تضف كلمات. لا تضع حركات الإعراب ولا التنوين على آخر الكلمات.
+أرجع JSON فقط: {{"lines": [نفس عدد الجمل بنفس الترتيب]}}"""
+    res = gv.gemini_json(prompt)
+    fixed = (res or {}).get("lines") if isinstance(res, dict) else None
+    if isinstance(fixed, list) and len(fixed) == len(lines) and all(isinstance(x, str) and x.strip() for x in fixed):
+        for a, b in zip(lines, fixed):
+            if strip_tashkeel(a) != strip_tashkeel(b):
+                log(f"تصحيح نطق: {strip_tashkeel(a)} ← {strip_tashkeel(b)}")
+        return fixed
+    return lines
+
+
 # ------------------------- السكربت -------------------------
 def write_script(history):
     cats = history.setdefault("fact_categories", [])
@@ -243,13 +277,16 @@ facts: ["لأن الجسم يرسل دماً أكثر إلى المعدة لهض
 - headline_top: سطر علوي قصير (2-4 كلمات) يشد ويخاطب المشاهد، مثل "حصلت لك؟" أو "جسمك يفعلها" أو "لا تتجاهلها"
 - headline_main: الكلمة الأساسية للموضوع (1-3 كلمات)
 - intro_say: جملة البداية المنطوقة (4-8 كلمات) بدون تشكيل
-- intro_voiced: نفس جملة البداية بالضبط لكن مشكّلة تشكيلاً كاملاً (للقارئ الآلي)
+- intro_voiced: نفس جملة البداية بالضبط، مع تشكيل الكلمات المحتملة للبس فقط (للقارئ الآلي)
 - facts: قائمة من 2 أو 3 عناصر، الأول هو الجواب والباقي توضيح، كل عنصر فيه:
     say: الجملة (7-13 كلمة) بدون تشكيل، للشاشة
-    voiced: نفس الجملة بالضبط مشكّلة تشكيلاً كاملاً، حتى ينطقها القارئ الآلي صح
-  مهم: الكلمات التي لها أكثر من نطق يجب تشكيلها بدقة حسب المعنى،
-  مثل: مُرَكَّبات (مواد كيميائية) وليس مَرْكَبات (سيارات)، عِلْم/عَلَم، يُحَسِّن/يَحْسُن.
-  وإذا وجدت كلمة أبسط بدون لبس فاستخدمها.
+    voiced: نفس الجملة بالضبط، مع تشكيل الكلمات المحتملة للبس فقط
+  قواعد النطق (مهمة جداً لأن قارئاً آلياً سيقرأ الكلام):
+  - استخدم كلمات شائعة يقولها الناس يومياً. تجنب الكلمات النادرة والمثنى المضاف الصعب.
+    مثال: "نصفي الدماغ" أو "جزأين من الدماغ" بدل "فصي دماغك".
+  - شكّل الكلمة التي تُقرأ بأكثر من طريقة حسب معناها، مثل: مُرَكَّبات (مواد) وليس مَرْكَبات (سيارات)،
+    فَيُسَجِّل، عِلْم/عَلَم، يُحَسِّن/يَحْسُن.
+  - لا تضع حركات الإعراب ولا التنوين على آخر الكلمات، حتى يكون النطق طبيعياً وليس متكلفاً.
 - clarity_score: من 1 إلى 10، كم يفهمها شخص عادي من أول مرة (كن صارماً)
 - pixabay_queries: قائمة من 3 عبارات بحث إنجليزية (2-3 كلمات) لتصوير فيديو حقيقي يوضح المعلومة بالضبط.
   الأولى أقوى لقطة افتتاحية تشد النظر وتطابق السؤال حرفياً (مثال: معلومة عن الرمش = "eye blinking", "eye close up", "eyes").
@@ -576,6 +613,13 @@ def main():
     voice_name = pick_voice(history)
     lines = ([script.get("intro_voiced") or script["intro_say"]]
              + [f.get("voiced") or f["say"] for f in script["facts"]])
+    lines = review_pronunciation(lines)
+    lines = [soften_endings(l) for l in lines]
+    # إذا المراجعة بدّلت كلمة صعبة، نخلي نص الشاشة نفس الكلام المنطوق
+    script["intro_say"] = strip_tashkeel(lines[0])
+    for f, l in zip(script["facts"], lines[1:]):
+        f["say"] = f["screen"] = strip_tashkeel(l)
+    log("النص المنطوق: " + " | ".join(lines))
     voice, durs = tts_lines(lines, voice_name, workdir)
 
     # كل نص يطلع بنفس وقت جملته بالصوت
