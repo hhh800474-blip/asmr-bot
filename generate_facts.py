@@ -40,7 +40,9 @@ VOICES = [v.strip() for v in os.getenv(
 ).split(",") if v.strip()]
 
 # المجالات اللي جابت أعلى مشاهدات بيوتيوب وفيسبوك وتيك توك: تجارب يعيشها الإنسان بجسمه ويومه
-WINNING = ["النوم", "جسم الإنسان", "الدماغ والذاكرة", "الأكل والجوع وعادات الطعام", "عادات يومية نفعلها دون أن ننتبه"]
+# المجال الأقوى بالمنصات الثلاث: القشعريرة، لمس الوجه، القدم من تحت البطانية، المنبه الطبيعي، السقوط عند النوم
+TOP = "حركات وإحساسات يفعلها جسمك دون أن تنتبه"
+WINNING = [TOP, "النوم", "جسم الإنسان", "الدماغ والذاكرة", "الأكل والجوع وعادات الطعام", "عادات يومية نفعلها دون أن ننتبه"]
 
 CATEGORIES = WINNING + [
     "صحة وعادات يومية", "رياضة ولياقة", "جسم الإنسان", "علم النفس والسلوك", "النوم",
@@ -169,8 +171,9 @@ def render_fact(text, path, color=(255, 221, 0)):
     img.save(path)
 
 
-def render_logo(path):
-    """لوكو #لمحة ثابت بالزاوية العليا اليمين (العلامة # بخط لاتيني حتى ما تطلع مربع)"""
+def render_logo(path, episode=None):
+    """لوكو #لمحة ثابت بالزاوية العليا اليمين (العلامة # بخط لاتيني حتى ما تطلع مربع)
+    وتحته رقم الحلقة حتى يحس المشاهد إنها سلسلة يومية تستاهل المتابعة"""
     img = Image.new("RGBA", (W, H), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
     word = LOGO_TEXT.replace("#", "").strip()
@@ -188,6 +191,15 @@ def render_logo(path):
     if "#" in LOGO_TEXT:
         d.text((x1 - 28 - hw - hb[0], cy - (hb[3] - hb[1]) / 2 - hb[1]), "#", font=fh, fill="white")
     d.text((x0 + 28 - b[0], cy - th / 2 - b[1]), shape(word), font=f, fill="white", **text_kw())
+    if episode:
+        label = f"رقم {episode}"
+        f2 = font(42)
+        tw2, th2, b2 = measure(d, label, f2)
+        ex1, ey0 = x1, y1 + 14
+        ex0, ey1 = ex1 - tw2 - 44, ey0 + th2 + 26
+        d.rounded_rectangle([ex0, ey0, ex1, ey1], radius=(ey1 - ey0) // 2, fill=(255, 214, 0, 235))
+        d.text((ex0 + 22 - b2[0], (ey0 + ey1) / 2 - th2 / 2 - b2[1]), shape(label), font=f2,
+               fill=(40, 10, 10), **text_kw())
     img.save(path)
 
 
@@ -235,10 +247,15 @@ def review_pronunciation(lines):
 # ------------------------- السكربت -------------------------
 def write_script(history):
     cats = history.setdefault("fact_categories", [])
-    # 70% من المجالات الناجحة (حسب أرقام القنوات)، و30% تجارب من الباقي
-    pool = WINNING if random.random() < 0.7 else [c for c in CATEGORIES if c not in WINNING]
-    fresh = [c for c in pool if c not in cats[-2:]] or pool
-    cat = random.choice(fresh)
+    # 50% المجال الأقوى، 30% باقي المجالات الناجحة، 20% تجارب
+    r = random.random()
+    if r < 0.5:
+        cat = TOP
+    else:
+        pool = ([c for c in WINNING if c != TOP] if r < 0.8
+                else [c for c in CATEGORIES if c not in WINNING])
+        fresh = [c for c in pool if c not in cats[-2:]] or pool
+        cat = random.choice(fresh)
     topics = history.setdefault("fact_topics", [])[-60:]
     openings = history.setdefault("fact_openings", [])[-12:]
     prompt = f"""أنت كاتب لقناة "لمحة" التي تنشر معلومة سريعة بالعربي في فيديو قصير (من 10 إلى 20 ثانية حسب الحاجة).
@@ -255,8 +272,9 @@ def write_script(history):
 - فكرة واحدة فقط، مكتملة: سؤال/بداية ← الجواب المباشر ← سبب أو توضيح بسيط.
 - الجملة الثانية لازم تجاوب على البداية بشكل صريح وواضح. لا ألغاز ولا معلومة ناقصة.
 - كل جملة لازم تكون مفهومة لو انقرت لوحدها.
-- الأفضل قصير ومباشر: 18-28 كلمة بجملتين. الإيقاع سريع وحيوي.
-  فقط إذا الموضوع ما ينفهم بدون توضيح إضافي، استخدم 3 جمل (لحد 36 كلمة).
+- قصير جداً ومباشر: الناس يطلعون أول ما يبدأ الجواب إذا كان طويلاً أو بارداً.
+  البناء: سؤال ← جواب واحد قوي يكشف السبب فوراً (جملة واحدة) ← وإذا يستاهل، جملة قصيرة جداً فيها مفاجأة أو تفصيل غريب.
+  المجموع 14-24 كلمة فقط.
 
 قواعد الأسلوب:
 - البداية مختلفة عن هذه البدايات السابقة: {openings}
@@ -278,8 +296,8 @@ facts: ["لأن الجسم يرسل دماً أكثر إلى المعدة لهض
 - headline_main: الكلمة الأساسية للموضوع (1-3 كلمات)
 - intro_say: جملة البداية المنطوقة (4-8 كلمات) بدون تشكيل
 - intro_voiced: نفس جملة البداية بالضبط، مع تشكيل الكلمات المحتملة للبس فقط (للقارئ الآلي)
-- facts: قائمة من 2 أو 3 عناصر، الأول هو الجواب والباقي توضيح، كل عنصر فيه:
-    say: الجملة (7-13 كلمة) بدون تشكيل، للشاشة
+- facts: قائمة من عنصر واحد أو عنصرين: الأول هو الجواب القوي، والثاني (اختياري) مفاجأة قصيرة. كل عنصر فيه:
+    say: الجملة (الجواب 7-11 كلمة، المفاجأة 4-8 كلمات) بدون تشكيل، للشاشة
     voiced: نفس الجملة بالضبط، مع تشكيل الكلمات المحتملة للبس فقط
   قواعد النطق (مهمة جداً لأن قارئاً آلياً سيقرأ الكلام):
   - استخدم كلمات شائعة يقولها الناس يومياً. تجنب الكلمات النادرة والمثنى المضاف الصعب.
@@ -300,7 +318,7 @@ facts: ["لأن الجسم يرسل دماً أكثر إلى المعدة لهض
         if not cand or not cand.get("facts") or not cand.get("intro_say"):
             continue
         facts = []
-        for f in cand["facts"][:3]:
+        for f in cand["facts"][:2]:
             say = f.get("say") if isinstance(f, dict) else str(f)
             voiced = (f.get("voiced") if isinstance(f, dict) else None) or say
             if say:
@@ -311,10 +329,10 @@ facts: ["لأن الجسم يرسل دماً أكثر إلى المعدة لهض
         words = len(cand["intro_say"].split()) + sum(len(f["say"].split()) for f in facts)
         score = float(cand.get("clarity_score", 0) or 0)
         log(f"محاولة {attempt + 1}: كلمات={words} وضوح={score}")
-        if len(facts) >= 2 and words <= 38 and score >= 8:
+        if len(facts) >= 1 and words <= 26 and score >= 8:
             res = cand
             break
-        res = res or (cand if len(facts) >= 2 else None)
+        res = res or (cand if len(facts) >= 1 else None)
     if not res:
         raise RuntimeError("Gemini ما رجّع سكربت")
     res["facts"] = [f for f in res["facts"] if f.get("say") and f.get("screen")][:3]
@@ -634,7 +652,11 @@ def main():
         overlays.append((p, t, t + durs[i + 1]))
         t += durs[i + 1]
     logo = workdir / "logo.png"
-    render_logo(logo)
+    ep = history.get("episode_counter")
+    ep = ep[0] if isinstance(ep, list) and ep else len(history.get("fact_topics", [])) + 1
+    history["episode_counter"] = [ep + 1]
+    script["episode"] = ep
+    render_logo(logo, ep)
 
     n_shots = 3 if sum(durs) <= 15 else 4      # الفيديو الأطول ياخذ لقطة زيادة حتى ما يمل
     media, author = get_media(script["pixabay_queries"], history, workdir, n=n_shots)
