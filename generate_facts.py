@@ -234,7 +234,7 @@ def review_pronunciation(lines):
 إذا وجدت كلمة نادرة أو صعبة النطق، استبدلها بكلمة شائعة بنفس المعنى.
 لا تغيّر معنى الجمل ولا تضف كلمات. لا تضع حركات الإعراب ولا التنوين على آخر الكلمات.
 أرجع JSON فقط: {{"lines": [نفس عدد الجمل بنفس الترتيب]}}"""
-    res = gv.gemini_json(prompt)
+    res = ask_json(prompt)
     fixed = (res or {}).get("lines") if isinstance(res, dict) else None
     if isinstance(fixed, list) and len(fixed) == len(lines) and all(isinstance(x, str) and x.strip() for x in fixed):
         for a, b in zip(lines, fixed):
@@ -242,6 +242,18 @@ def review_pronunciation(lines):
                 log(f"تصحيح نطق: {strip_tashkeel(a)} ← {strip_tashkeel(b)}")
         return fixed
     return lines
+
+
+def ask_json(prompt):
+    """Gemini أحياناً يرجع قائمة [ {...} ] بدل كائن {...}. نوحّد الشكل حتى ما يوگف الفيديو"""
+    try:
+        r = gv.gemini_json(prompt)
+    except Exception as e:
+        log(f"Gemini فشل ({str(e)[:60]})")
+        return None
+    if isinstance(r, list):
+        r = next((x for x in r if isinstance(x, dict)), None)
+    return r if isinstance(r, dict) else None
 
 
 # ------------------------- السكربت -------------------------
@@ -327,7 +339,7 @@ facts: ["لأن الجسم يرسل دماً أكثر إلى المعدة لهض
 - hashtags: 4 هاشتاغات عربية"""
     res = None
     for attempt in range(3):
-        cand = gv.gemini_json(prompt)
+        cand = ask_json(prompt)
         if not cand or not cand.get("facts") or not cand.get("intro_say"):
             continue
         facts = []
