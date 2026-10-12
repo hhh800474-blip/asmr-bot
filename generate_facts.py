@@ -157,7 +157,7 @@ def render_fact(text, path, color=(255, 221, 0)):
     # الجملة كاملة على الشاشة: نصغّر الخط إذا طويلة حتى ما تتجاوز 3 أسطر
     for size in (74, 66, 58):
         f = font(size)
-        lines = wrap(d, text, f, 920)
+        lines = wrap(d, text, f, 860)
         if len(lines) <= 3:
             break
     y = 1220 - (len(lines) - 1) * 55
@@ -288,6 +288,9 @@ def write_script(history):
 - اربط المعلومة بحياة الناس اليومية في العراق والعالم العربي عندما يكون ذلك طبيعياً
   (الحر، الشاي، السهر، الصيام، الأكل الثقيل، الهاتف قبل النوم...) حتى يحس المشاهد إنها تخصه.
 - العمق: لا تكتفِ بالمعلومة المعروفة. أضف تفصيلاً لا يعرفه أغلب الناس.
+- الترابط: الجواب لازم يكمل جملة البداية منطقياً. لا تبدأ الجواب بـ "لأن" إلا إذا البداية سؤال "لماذا".
+- الاكتمال: كل جملة مفهومة لوحدها. النصيحة تذكر متى وبعد إيش بالضبط
+  (مثال صحيح: "انتظر ساعة بعد الأكل قبل الشاي"، مثال ناقص: "انتظر ساعة واحدة").
 - أول جملة هي أهم شي بالفيديو: 75% من الناس يقررون يكملون أو يمررون بأول ثانيتين.
   اجعلها تخاطب المشاهد مباشرة بتجربة عاشها بنفسه أو شي يخصه، مثل:
   "هل شعرت يوماً أنك تسقط وأنت نائم؟"، "لماذا تتثاءب عندما ترى غيرك يتثاءب؟"،
@@ -335,6 +338,14 @@ facts: ["لأن الجسم يرسل دماً أكثر إلى المعدة لهض
                 say = strip_tashkeel(say)
                 # الشاشة = نفس الكلام (بدون تشكيل)، والصوت يقرا النسخة المشكّلة حتى ينطق صح
                 facts.append({"say": say, "screen": say, "voiced": voiced})
+        intro = strip_tashkeel(cand["intro_say"]).strip()
+        if facts and not intro.startswith(("لماذا", "ليش", "لم ")):
+            for key in ("say", "screen", "voiced"):
+                t = facts[0][key]
+                for pre in ("لأنَّ ", "لِأَنَّ ", "لأن ", "لان "):
+                    if t.startswith(pre):
+                        facts[0][key] = t[len(pre):]
+                        break
         cand["facts"] = facts
         words = len(cand["intro_say"].split()) + sum(len(f["say"].split()) for f in facts)
         score = float(cand.get("clarity_score", 0) or 0)
@@ -377,13 +388,34 @@ def pick_voice(history):
     return VOICES[i % len(VOICES)]
 
 
+def speak(text, voice, mp3):
+    """Edge-TTS مع إعادة محاولة. مايكروسوفت أحياناً ترد 403 مؤقتاً،
+    وإذا استمر الرفض نستخدم صوت Google (gTTS) كاحتياط حتى ما يوگف الفيديو"""
+    import time
+    try:
+        import edge_tts
+        for k in range(4):
+            try:
+                asyncio.run(edge_tts.Communicate(text, voice, rate="+12%").save(str(mp3)))
+                if Path(mp3).exists() and Path(mp3).stat().st_size > 1000:
+                    return "edge"
+            except Exception as e:
+                log(f"Edge-TTS تعثر بالمحاولة {k + 1} ({str(e)[:70]})")
+            time.sleep(4 * (k + 1))
+    except ImportError:
+        pass
+    from gtts import gTTS
+    gTTS(strip_tashkeel(text), lang="ar").save(str(mp3))
+    log("استخدمنا صوت Google الاحتياطي لهذه الجملة")
+    return "gtts"
+
+
 def tts_lines(lines, voice, workdir):
     """كل جملة لوحدها حتى نعرف وقتها بالضبط"""
-    import edge_tts
     raw = []
     for i, text in enumerate(lines):
         mp3 = workdir / f"line{i}.mp3"
-        asyncio.run(edge_tts.Communicate(text, voice, rate="+12%").save(str(mp3)))
+        speak(text, voice, mp3)
         raw.append(mp3)
     gaps = [0.12] * (len(lines) - 1) + [0.3]
     total = sum(duration(m) for m in raw) + sum(gaps)
@@ -427,10 +459,17 @@ def tag_words(tags):
     return {w for t in tags.lower().split(",") for w in t.strip().split()}
 
 
+SCENERY = {"sky", "clouds", "cloud", "sea", "ocean", "beach", "landscape", "mountain", "mountains",
+           "sunset", "sunrise", "horizon", "lake", "panorama", "scenery", "nature"}
+
+
 def score(h, words):
     """كم كلمة من البحث موجودة بالوسوم. الصفر يعني مو مناسب، و-1 يعني رسوم/مو حقيقي"""
     tw = tag_words(h.get("tags", ""))
     if tw & ART or tw & NSFW:
+        return -1
+    # لقطات سما وبحر وجبال "حشوة" ما تخص الموضوع، نرفضها إلا إذا البحث نفسه عن الطبيعة
+    if len(tw & SCENERY) >= 2 and not (set(words) & SCENERY):
         return -1
     return len(set(words) & tw)
 
