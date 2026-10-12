@@ -388,35 +388,136 @@ def pick_voice(history):
     return VOICES[i % len(VOICES)]
 
 
-def speak(text, voice, mp3):
-    """Edge-TTS مع إعادة محاولة. مايكروسوفت أحياناً ترد 403 مؤقتاً،
-    وإذا استمر الرفض نستخدم صوت Google (gTTS) كاحتياط حتى ما يوگف الفيديو"""
+GEMINI_TTS_MODELS = [m for m in [os.getenv("GEMINI_TTS_MODEL", "").strip(),
+                                  "gemini-3.1-flash-tts-preview", "gemini-2.5-flash-preview-tts"] if m]
+FEMALE_EDGE = ("Zariyah", "Fatima", "Amany", "Salma", "Laila", "Mouna", "Iman", "Noura", "Sana", "Rana")
+GEMINI_MALE = ["Charon", "Orus", "Fenrir", "Puck"]
+GEMINI_FEMALE = ["Kore", "Leda", "Aoede", "Zephyr"]
+
+
+def edge_speak(text, voice, mp3, tries=2):
+    """Edge-TTS (مايكروسوفت). صار يرد 403 كثير من سيرفرات GitHub، فنجربه مرتين بس"""
     import time
     try:
         import edge_tts
-        for k in range(4):
-            try:
-                asyncio.run(edge_tts.Communicate(text, voice, rate="+12%").save(str(mp3)))
-                if Path(mp3).exists() and Path(mp3).stat().st_size > 1000:
-                    return "edge"
-            except Exception as e:
-                log(f"Edge-TTS تعثر بالمحاولة {k + 1} ({str(e)[:70]})")
-            time.sleep(4 * (k + 1))
     except ImportError:
-        pass
+        return False
+    for k in range(tries):
+        try:
+            asyncio.run(edge_tts.Communicate(text, voice, rate="+12%").save(str(mp3)))
+            if Path(mp3).exists() and Path(mp3).stat().st_size > 1000:
+                return True
+        except Exception as e:
+            log(f"Edge-TTS تعثر بالمحاولة {k + 1} ({str(e)[:60]})")
+        time.sleep(3)
+    return False
+
+
+def gemini_tts(text, voice_name, out_wav):
+    """صوت Gemini: جودة عالية وطبيعي، ويستخدم نفس مفتاح Gemini"""
+    import base64
+    key = gv.GEMINI_API_KEY
+    if not key:
+        return False
+    prompt = ("Read the following Arabic text aloud in clear, natural, lively Modern Standard Arabic, "
+              "like a short social media narrator, with a brief pause between sentences:\n\n" + text)
+    body = {"contents": [{"parts": [{"text": prompt}]}],
+            "generationConfig": {"responseModalities": ["AUDIO"],
+                                 "speechConfig": {"voiceConfig": {"prebuiltVoiceConfig": {"voiceName": voice_name}}}}}
+    for model in GEMINI_TTS_MODELS:
+        try:
+            r = requests.post(f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+                              json=body, timeout=120, headers={"x-goog-api-key": key})
+            if r.status_code != 200:
+                log(f"Gemini TTS {model}: {r.status_code} {r.text[:80]}")
+                continue
+            part = r.json()["candidates"][0]["content"]["parts"][0]["inlineData"]
+            pcm = Path(out_wav).with_suffix(".pcm")
+            pcm.write_bytes(base64.b64decode(part["data"]))
+            rate = 24000
+            for bit in part.get("mimeType", "").split(";"):
+                if bit.strip().startswith("rate="):
+                    rate = int(bit.split("=")[1])
+            subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-f", "s16le", "-ar", str(rate), "-ac", "1",
+                            "-i", str(pcm), str(out_wav)], check=True)
+            log(f"صوت Gemini ({model}, {voice_name})")
+            return True
+        except Exception as e:
+            log(f"Gemini TTS {model} فشل ({str(e)[:80]})")
+    return False
+
+
+def silences(path):
+    out = subprocess.run(["ffmpeg", "-hide_banner", "-i", str(path), "-af",
+                          "silencedetect=noise=-38dB:d=0.18", "-f", "null", "-"],
+                         capture_output=True, text=True).stderr
+    res, start = [], None
+    for line in out.splitlines():
+        if "silence_start:" in line:
+            start = float(line.split("silence_start:")[1].split()[0])
+        elif "silence_end:" in line and start is not None:
+            end = float(line.split("silence_end:")[1].split("|")[0])
+            res.append((start + end) / 2)
+            start = None
+    return res
+
+
+def split_by_lines(wav, lines, workdir):
+    """نقسم ملف الصوت الواحد على الجمل: الحدود التقريبية حسب طول كل جملة، ونلصقها بأقرب سكتة"""
+    total = duration(wav)
+    weights = [max(1, len(strip_tashkeel(l))) for l in lines]
+    cuts, acc = [], 0
+    for w in weights[:-1]:
+        acc += w
+        cuts.append(total * acc / sum(weights))
+    gaps = silences(wav)
+    fixed = []
+    for c in cuts:
+        near = [g for g in gaps if abs(g - c) <= 1.2 and (not fixed or g > fixed[-1] + 0.3)]
+        fixed.append(min(near, key=lambda g: abs(g - c)) if near else c)
+    bounds = [0.0] + fixed + [total]
+    parts = []
+    for i in range(len(lines)):
+        p = workdir / f"line{i}.mp3"
+        subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", str(wav), "-ss", f"{bounds[i]:.3f}",
+                        "-to", f"{bounds[i + 1]:.3f}", str(p)], check=True)
+        parts.append(p)
+    return parts
+
+
+def gtts_speak(text, mp3):
     from gtts import gTTS
     gTTS(strip_tashkeel(text), lang="ar").save(str(mp3))
-    log("استخدمنا صوت Google الاحتياطي لهذه الجملة")
-    return "gtts"
 
 
 def tts_lines(lines, voice, workdir):
-    """كل جملة لوحدها حتى نعرف وقتها بالضبط"""
+    """الترتيب: Edge (مايكروسوفت) ← Gemini ← Google الاحتياطي"""
     raw = []
-    for i, text in enumerate(lines):
-        mp3 = workdir / f"line{i}.mp3"
-        speak(text, voice, mp3)
-        raw.append(mp3)
+    engine = "edge"
+    first = workdir / "line0.mp3"
+    if edge_speak(lines[0], voice, first):
+        raw.append(first)
+        for i, text in enumerate(lines[1:], 1):
+            mp3 = workdir / f"line{i}.mp3"
+            if not edge_speak(text, voice, mp3, tries=3):
+                gtts_speak(text, mp3)
+            raw.append(mp3)
+    else:
+        female = any(n in voice for n in FEMALE_EDGE)
+        pool = GEMINI_FEMALE if female else GEMINI_MALE
+        gvoice = pool[sum(map(ord, voice)) % len(pool)]
+        full = workdir / "gemini_full.wav"
+        if gemini_tts("\n".join(lines), gvoice, full):
+            engine = "gemini"
+            raw = split_by_lines(full, lines, workdir)
+        else:
+            engine = "gtts"
+            for i, text in enumerate(lines):
+                mp3 = workdir / f"line{i}.mp3"
+                gtts_speak(text, mp3)
+                raw.append(mp3)
+            log("استخدمنا صوت Google الاحتياطي")
+    voice = f"{engine}:{voice}"
     gaps = [0.12] * (len(lines) - 1) + [0.3]
     total = sum(duration(m) for m in raw) + sum(gaps)
     # إذا أطول من الحد نسرّعه شوية (لحد 20%)
