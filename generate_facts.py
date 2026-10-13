@@ -366,6 +366,11 @@ facts: ["لأن الجسم يرسل دماً أكثر إلى المعدة لهض
         words = len(cand["intro_say"].split()) + sum(len(f["say"].split()) for f in facts)
         score = float(cand.get("clarity_score", 0) or 0)
         log(f"محاولة {attempt + 1}: كلمات={words} وضوح={score}")
+        topic_n = strip_tashkeel(str(cand.get("topic", ""))).replace("ال", "").strip()
+        dup = topic_n and any(topic_n == strip_tashkeel(t).replace("ال", "").strip() for t in topics[-30:])
+        if dup and attempt < 2:
+            log(f"الموضوع '{cand.get('topic')}' انعرض قبل، نطلب غيره")
+            continue
         if len(facts) >= 1 and words <= 26 and score >= 8:
             res = cand
             break
