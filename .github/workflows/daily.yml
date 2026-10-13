@@ -8,6 +8,10 @@ permissions:
   pages: write
   id-token: write
 
+concurrency:
+  group: lamha-video
+  cancel-in-progress: false
+
 jobs:
   make-video:
     runs-on: ubuntu-latest
@@ -17,6 +21,8 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url || steps.deployment2.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: main
 
       - uses: actions/setup-python@v5
         with:
@@ -26,7 +32,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y ffmpeg fonts-dejavu-core fonts-noto-core libraqm0 libfribidi0
 
       - name: Install packages
-        run: pip install -r requirements.txt
+        run: pip install -U -r requirements.txt
 
       - name: Generate video
         env:
@@ -36,6 +42,18 @@ jobs:
           MAX_SECONDS: "20"
           LOGO_TEXT: "#لمحة"
         run: python generate_facts.py
+
+      - name: Save history
+        run: |
+          git config user.name "asmr-bot"
+          git config user.email "asmr-bot@users.noreply.github.com"
+          git add history.json
+          git commit -m "update history" || exit 0
+          for i in 1 2 3 4 5; do
+            git pull --rebase -X theirs origin main && git push origin HEAD:main && exit 0
+            echo "push failed, retry $i"; sleep 5
+          done
+          echo "::error::Could not save history.json"; exit 1
 
       - name: Save video for download
         uses: actions/upload-artifact@v4
@@ -76,12 +94,3 @@ jobs:
           PUBLISH_PLATFORMS: "youtube,tiktok,facebook"
           VIDEO_URL: ${{ steps.deployment.outputs.page_url || steps.deployment2.outputs.page_url }}v${{ github.run_id }}.mp4
         run: python publish.py
-
-      - name: Save history
-        if: always()
-        run: |
-          git config user.name "asmr-bot"
-          git config user.email "asmr-bot@users.noreply.github.com"
-          git add history.json || true
-          git commit -m "update history" || echo "no changes"
-          git push || true
