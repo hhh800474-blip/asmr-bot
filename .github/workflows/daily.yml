@@ -65,7 +65,9 @@ jobs:
       - name: Prepare video page
         run: |
           mkdir -p site
-          cp "$(ls -d output/*/ | tail -1)video.mp4" "site/v${{ github.run_id }}.mp4"
+          D="$(ls -d output/*/ | tail -1)"
+          cp "${D}video.mp4" "site/v${{ github.run_id }}.mp4"
+          if [ -f "${D}video_tiktok.mp4" ]; then cp "${D}video_tiktok.mp4" "site/t${{ github.run_id }}.mp4"; else cp "${D}video.mp4" "site/t${{ github.run_id }}.mp4"; fi
           echo "ok" > site/index.html
 
       - uses: actions/configure-pages@v5
@@ -93,4 +95,5 @@ jobs:
           BUFFER_API_KEY: ${{ secrets.BUFFER_API_KEY }}
           PUBLISH_PLATFORMS: "youtube,tiktok,facebook"
           VIDEO_URL: ${{ steps.deployment.outputs.page_url || steps.deployment2.outputs.page_url }}v${{ github.run_id }}.mp4
+          TIKTOK_VIDEO_URL: ${{ steps.deployment.outputs.page_url || steps.deployment2.outputs.page_url }}t${{ github.run_id }}.mp4
         run: python publish.py
