@@ -14,6 +14,7 @@ import asyncio
 import json
 import os
 import random
+import shutil
 import subprocess
 import sys
 from datetime import datetime
@@ -845,6 +846,25 @@ def main():
     video = workdir / "video.mp4"
     build(media, voice, durs, overlays, logo, music, video)
 
+    # نسخة تيك توك: أقصر (السؤال + الجواب بس) لأن جمهور تيك توك يمرر بسرعة
+    # (إحصاءات تيك توك: متوسط المشاهدة 3.8 ثانية، و7% بس يكملون الفيديو)
+    tiktok = workdir / "video_tiktok.mp4"
+    try:
+        if len(durs) > 2:
+            k = 2
+            short_voice = workdir / "voice_short.wav"
+            subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", str(voice), "-t",
+                            f"{sum(durs[:k]):.2f}", str(short_voice)], check=True)
+            build(media[:2] if len(media) >= 2 else media, short_voice, durs[:k], overlays[:k],
+                  logo, music, tiktok)
+            log("نسخة تيك توك القصيرة جاهزة")
+        else:
+            shutil.copy(video, tiktok)
+            log("الفيديو أصلاً قصير، نسخة تيك توك = نفس الفيديو")
+    except Exception as e:
+        log(f"نسخة تيك توك فشلت ({str(e)[:60]})، نستخدم الفيديو العادي")
+        shutil.copy(video, tiktok)
+
     credits = f"\n\nلقطات: {author} (Pixabay)"
     if music_credit:
         credits += f"\nموسيقى: {music_credit['author']} (Freesound)"
@@ -856,6 +876,7 @@ def main():
                         + " ".join(script["hashtags"]) + credits),
         "hashtags": script["hashtags"],
         "video_file": str(video),
+        "video_tiktok": str(tiktok),
         "ai_voice": True,
         "ai_generated": True,
         "topic": script["topic"],
@@ -864,7 +885,7 @@ def main():
     }
     (workdir / "meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
     for f in workdir.iterdir():
-        if f.name not in ("video.mp4", "meta.json"):
+        if f.name not in ("video.mp4", "video_tiktok.mp4", "meta.json"):
             f.unlink()
 
     history["fact_categories"].append(script["category"])

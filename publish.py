@@ -28,6 +28,7 @@ PLATFORMS = [p.strip() for p in os.getenv("PUBLISH_PLATFORMS", "youtube,tiktok,f
 YOUTUBE_CATEGORY = os.getenv("YOUTUBE_CATEGORY", "24")   # 24 = Entertainment
 BUFFER_URL = "https://api.buffer.com"
 VIDEO_URL = os.getenv("VIDEO_URL", "").strip()   # رابط GitHub Pages من ملف التشغيل
+TIKTOK_VIDEO_URL = os.getenv("TIKTOK_VIDEO_URL", "").strip()   # نسخة تيك توك القصيرة
 OUT_ROOT = Path(__file__).parent / "output"
 
 
@@ -178,7 +179,7 @@ def build_input(channel, video_url, meta):
     service = channel["service"].lower()
     title = meta["title"][:100]
     hashtags = " ".join(meta.get("hashtags", []))
-    ai = bool(meta.get("ai_voice"))
+    ai = bool(meta.get("ai_generated", meta.get("ai_voice")))
 
     inp = {
         "channelId": channel["id"],
@@ -215,11 +216,19 @@ def main():
         raise RuntimeError("ما لگينا قنوات مربوطة بـ Buffer (يوتيوب/تيك توك/فيسبوك)")
 
     video_url = upload_media(video_path)
+    tiktok_url = video_url
+    if TIKTOK_VIDEO_URL and TIKTOK_VIDEO_URL != video_url:
+        if url_works(TIKTOK_VIDEO_URL, tries=6, wait=10):
+            tiktok_url = TIKTOK_VIDEO_URL
+            log("تيك توك ياخذ النسخة القصيرة")
+        else:
+            log("نسخة تيك توك القصيرة ما توصلت، ننشر العادية")
 
     ok = 0
     for ch in channels:
         try:
-            res = gql(CREATE_POST, {"input": build_input(ch, video_url, meta)})["createPost"]
+            url = tiktok_url if ch["service"].lower() == "tiktok" else video_url
+            res = gql(CREATE_POST, {"input": build_input(ch, url, meta)})["createPost"]
             if res.get("post"):
                 ok += 1
                 log(f"✅ {ch['service']}: انرسل (post {res['post']['id']})")
