@@ -14,6 +14,7 @@ import asyncio
 import json
 import os
 import random
+import re
 import shutil
 import subprocess
 import sys
@@ -44,16 +45,89 @@ VOICES = [v.strip() for v in os.getenv(
 # المجال الأقوى بالمنصات الثلاث: القشعريرة، لمس الوجه، القدم من تحت البطانية، المنبه الطبيعي، السقوط عند النوم
 # حسب أرقام Metricool (أكتوبر): الأعلى بفيسبوك كلها تجارب غريبة يعيشها الدماغ والنوم
 # (السقوط عند النوم 2596، المهام المعلقة 2002، شلل النوم 1900، لمس الوجه 1851، رؤية وجوه بالأشياء 1772)
-TOP = ("تجارب غريبة يعيشها دماغك أو يحصل لك أثناء النوم والاستيقاظ "
-       "(مثل: ديجافو، شلل النوم، السقوط عند النوم، المهام المعلقة بالبال، رؤية وجوه بالأشياء)")
-WINNING = [TOP, "حركات وإحساسات يفعلها جسمك دون أن تنتبه", "النوم والأحلام", "الدماغ والذاكرة وخدع العقل"]
-
-CATEGORIES = WINNING + [
-    "علم النفس والسلوك", "عادات يومية نفعلها دون أن ننتبه", "جسم الإنسان",
-    "صحة وعادات يومية",
-    # الطبيعة والحيوانات والأكل والفضاء كانت الأضعف (85-250 مشاهدة) فشلناها
+# نوفمبر: المجال الضيق (تجارب الدماغ والنوم 60%) خلصت أفكاره وصار البوت يعيد مواضيع،
+# فوسّعنا المجالات حسب أعلى فيديوات فيسبوك (تحبس نفسك بالموبايل 63K، ذكريات الطفولة 22K،
+# الحلم إنك قعدت 21K، الأغنية العالقة 11K، أصوات الأكل 9K، الرجفة بعد الحمام 6K، رفة العين 6K)
+WEIGHTED_CATEGORIES = [
+    ("إحساسات وحركات يسويها جسمك بدون ما تنتبه (مثل: رفة العين، القشعريرة، الرجفة، الحكة، الغصة، أصوات البطن، التنميل، الفواق)", 30),
+    ("خدع الدماغ والذاكرة (مثل: النسيان المفاجئ، ذكريات الطفولة، الأغنية العالقة، الديجافو، الأسماء والوجوه، الانتباه والتركيز)", 20),
+    ("النوم والأحلام والاستيقاظ", 15),
+    ("عادات الموبايل والشاشات وتأثيرها على جسمك ودماغك (النفس، العين، الرقبة، النوم، التركيز، الإبهام)", 15),
+    ("الأكل والشرب وعاداتهم اليومية وتأثيرها على الجسم (الحار، البارد، السكر، الشاي، الماي، الجوع، الشبع)", 10),
+    ("علم النفس والسلوك الاجتماعي (الإحراج، التقليد، الإحساس إن الكل يباوعلك، الضحك، العصبية، الخجل)", 10),
 ]
-CATEGORIES = list(dict.fromkeys(CATEGORIES))   # بدون تكرار
+CATEGORIES = [c for c, _ in WEIGHTED_CATEGORIES]
+
+
+# ------------------------- منع تكرار المواضيع -------------------------
+_AR_STOP = {"ليش", "لماذا", "لما", "من", "في", "على", "عن", "الى", "إلى", "مع", "بس", "حتى", "وانت", "انت",
+            "وأنت", "أنت", "احنا", "إحنا", "واحنا", "وإحنا", "هل", "ما", "مو", "لو", "اذا", "إذا", "كل", "شي",
+            "تحس", "نحس", "يحس", "تشعر", "نشعر", "فجأة", "فجاة", "يصير", "تصير", "صار", "هذا", "هذه", "اللي",
+            "بدون", "شنو", "ليه", "كيف", "يوم", "عند", "بعد", "قبل", "وهو", "وهي", "جسمك", "دماغك", "عقلك"}
+
+
+def _norm_word(w):
+    w = strip_tashkeel(w)
+    for a, b in (("أ", "ا"), ("إ", "ا"), ("آ", "ا"), ("ة", "ه"), ("ى", "ي"), ("ؤ", "و"), ("ئ", "ي")):
+        w = w.replace(a, b)
+    w = re.sub(r"[^ء-ي]", "", w)
+    for pre in ("وال", "بال", "فال", "كال", "لل", "ال"):
+        if w.startswith(pre) and len(w) - len(pre) >= 3:
+            w = w[len(pre):]
+            break
+    if len(w) > 4 and w[0] in "وفبل":
+        w = w[1:]
+    for suf in ("كم", "نا", "ها", "ك", "ه"):
+        if w.endswith(suf) and len(w) - len(suf) >= 3:
+            w = w[: -len(suf)]
+            break
+    return w
+
+
+def topic_words(text):
+    words = {_norm_word(w) for w in str(text).split()}
+    return {w for w in words if len(w) >= 3 and w not in {_norm_word(s) for s in _AR_STOP}}
+
+
+def is_repeat(cand, past_texts):
+    """يرجّع النص القديم إذا الموضوع الجديد يشبهه (نفس الكلمات الأساسية)"""
+    new_sets = [topic_words(cand.get(k, "")) for k in ("title", "intro_say", "topic")]
+    new_sets = [s for s in new_sets if s]
+    for old in past_texts:
+        o = topic_words(old)
+        if not o:
+            continue
+        for n in new_sets:
+            shared = n & o
+            if len(shared) >= 2 and len(shared) / min(len(n), len(o)) >= 0.5:
+                return old
+            if len(n) == 1 and n == o:
+                return old
+    return None
+
+
+def ai_repeat(cand, past_list):
+    """فحص ثاني بـ Gemini: نفس الفكرة بكلمات مختلفة؟ (مثل: تنسى ليش دخلت الغرفة = تنسى شتريد بس تعبر الباب)"""
+    if not past_list.strip():
+        return None
+    new = f"{cand.get('title', '')} | {cand.get('intro_say', '')} | {cand.get('topic', '')}"
+    prompt = f"""هذه قائمة فيديوات انعرضت بقناة معلومات قصيرة:
+{past_list}
+
+الفيديو الجديد المقترح: {new}
+
+هل الفيديو الجديد يشرح نفس الظاهرة أو نفس الفكرة لأي فيديو بالقائمة، حتى لو بكلمات مختلفة أو لهجة مختلفة؟
+أمثلة تكرار: "تنسى ليش دخلت للغرفة" = "تنسى شتريد بس تعبر الباب"، "الاهتزاز الوهمي بجيبك" = "تحس موبايلك يهتز وهو صامت"،
+"ما تكدر تنام زين بمكان جديد" = "نومك بمكان جديد يصير خفيف".
+مو تكرار: نفس المجال بس ظاهرة مختلفة (مثل "رفة العين" و"الخيوط السودة بالعين").
+أرجع JSON فقط: {{"repeat": true/false, "same_as": "عنوان الفيديو القديم أو فارغ"}}"""
+    try:
+        r = ask_json(prompt)
+        if r and r.get("repeat") in (True, "true", "True"):
+            return r.get("same_as") or "موضوع قديم"
+    except Exception as e:
+        log(f"فحص التكرار بـ Gemini فشل، نكمل: {str(e)[:120]}")
+    return None
 
 
 # ------------------------- الخط العربي -------------------------
@@ -263,23 +337,30 @@ def ask_json(prompt):
 # ------------------------- السكربت -------------------------
 def write_script(history):
     cats = history.setdefault("fact_categories", [])
-    # 60% المجال الأقوى، 30% باقي المجالات الناجحة، 10% تجارب
-    r = random.random()
-    if r < 0.6:
-        cat = TOP
-    else:
-        pool = ([c for c in WINNING if c != TOP] if r < 0.9
-                else [c for c in CATEGORIES if c not in WINNING])
-        fresh = [c for c in pool if c not in cats[-2:]] or pool
-        cat = random.choice(fresh)
-    topics = history.setdefault("fact_topics", [])[-60:]
-    openings = history.setdefault("fact_openings", [])[-12:]
+    # اختيار المجال حسب الأوزان، وما نعيد نفس مجال الفيديو اللي قبله
+    pool = [(c, w) for c, w in WEIGHTED_CATEGORIES if not cats or c != cats[-1]] or WEIGHTED_CATEGORIES
+    cat = random.choices([c for c, _ in pool], weights=[w for _, w in pool])[0]
+    # كل المواضيع من البداية (العناوين + جمل البداية + أسماء المواضيع) حتى ما يتكرر ولا موضوع
+    all_topics = history.setdefault("fact_topics", [])
+    all_openings = history.setdefault("fact_openings", [])
+    all_titles = [t for t in history.get("fact_titles", []) + history.get("titles", []) if isinstance(t, str) and t]
+    past_texts = list(dict.fromkeys(all_titles + all_openings + all_topics))
+    past_list = "\n".join(f"- {t}" for t in dict.fromkeys(all_titles + all_openings))
+    topics = all_topics[-60:]
+    openings = all_openings[-12:]
+    rejected = []
     recent_why = sum(1 for o in openings[-3:] if o.strip().startswith("لماذا"))
     why_rule = ('- ممنوع هذه المرة تبدأ بـ "لماذا" (تكررت كثيراً). استخدم صيغة ثانية.'
                 if recent_why >= 2 else '- "لماذا" مسموحة، لكن لا تجعلها عادة.')
     prompt = f"""أنت كاتب لقناة "لمحة" التي تنشر معلومة سريعة بالعربي في فيديو قصير (من 10 إلى 20 ثانية حسب الحاجة).
 المجال هذه المرة: {cat}
-اختر موضوعاً محدداً جديداً داخل هذا المجال، مختلفاً عن هذه المواضيع السابقة: {topics}
+اختر موضوعاً محدداً جديداً داخل هذا المجال.
+
+ممنوع منعاً باتاً تكرار أي فكرة انعرضت قبل، حتى لو بكلمات مختلفة أو من زاوية ثانية.
+(مثال تكرار ممنوع: "تنسى ليش دخلت للغرفة" و"تنسى شتريد بس تعبر الباب" نفس الفكرة.)
+هذه كل الفيديوات اللي انعرضت بالقناة:
+{past_list}
+{{rejected}}
 
 قواعد الدقة (مهمة جداً):
 - معلومات صحيحة ومعروفة علمياً فقط. إذا لم تكن متأكداً فاختر موضوعاً آخر.
@@ -348,8 +429,11 @@ facts: ["لأن الجسم يرسل دماً أكثر إلى المعدة لهض
 - comment_question: سؤال قصير جداً يخص تجربة المشاهد مع هذا الموضوع حتى يعلّق، مثل "حصلت معك اليوم؟" أو "منو بيكم يسوي هيج؟" (بالعامية العراقية، أقل من 8 كلمات)
 - hashtags: 4 هاشتاغات عربية"""
     res = None
-    for attempt in range(3):
-        cand = ask_json(prompt)
+    fallback = None
+    for attempt in range(5):
+        rej = ("\nوهذه أفكار اقترحتها هسه وطلعت مكررة، لا تقترحها ولا تقترح شي يشبهها:\n"
+               + "\n".join(f"- {t}" for t in rejected)) if rejected else ""
+        cand = ask_json(prompt.replace("{rejected}", rej))
         if not cand or not cand.get("facts") or not cand.get("intro_say"):
             continue
         facts = []
@@ -372,15 +456,19 @@ facts: ["لأن الجسم يرسل دماً أكثر إلى المعدة لهض
         words = len(cand["intro_say"].split()) + sum(len(f["say"].split()) for f in facts)
         score = float(cand.get("clarity_score", 0) or 0)
         log(f"محاولة {attempt + 1}: كلمات={words} وضوح={score}")
-        topic_n = strip_tashkeel(str(cand.get("topic", ""))).replace("ال", "").strip()
-        dup = topic_n and any(topic_n == strip_tashkeel(t).replace("ال", "").strip() for t in topics[-30:])
-        if dup and attempt < 2:
-            log(f"الموضوع '{cand.get('topic')}' انعرض قبل، نطلب غيره")
+        old = is_repeat(cand, past_texts) or ai_repeat(cand, past_list)
+        if old:
+            log(f"الموضوع '{cand.get('title') or cand.get('topic')}' يشبه موضوع قديم '{old}'، نطلب غيره")
+            rejected.append(cand.get("title") or cand.get("intro_say") or cand.get("topic"))
+            fallback = fallback or (cand if len(facts) >= 1 else None)
             continue
         if len(facts) >= 1 and words <= 26 and score >= 8:
             res = cand
             break
         res = res or (cand if len(facts) >= 1 else None)
+    if not res and fallback:
+        log("⚠️ كل المحاولات طلعت مشابهة لمواضيع قديمة، نستخدم أقرب وحدة")
+        res = fallback
     if not res:
         raise RuntimeError("Gemini ما رجّع سكربت")
     res["facts"] = [f for f in res["facts"] if f.get("say") and f.get("screen")][:3]
@@ -892,6 +980,7 @@ def main():
     history["fact_topics"].append(script["topic"])
     history["fact_openings"].append(script["intro_say"])
     history.setdefault("titles", []).append(script["title"])
+    history.setdefault("fact_titles", []).append(script["title"])
     gv.save_history(history)
     log("✅ خلصنا")
     return meta
